@@ -1,6 +1,8 @@
 /*
  * 衆院選データ横断検索β — DuckDB-Wasm 検索
- * v2.4.10
+ * v2.4.11
+ * - 更新日時の表示を強化（meta / manifest フォールバック、HTML初期値）
+ * - CSVから source_code（出典）列を除外
  * - 人名表示は漢字を基本（かなは candidate_raw 経由で検索ヒット）
  * - 結果のページ送り（1ページ件数 × 前後移動）
  * - 人名表示: 3行レイアウトの短い読み断片（例:「こ」）を捨て、最長のかな行を採用
@@ -147,16 +149,26 @@ function formatUpdatedAt(iso) {
 
 async function loadUpdatedAt() {
   if (!els.updatedAt) return;
-  try {
-    const response = await fetch(new URL('./data/meta.json', window.location.href).href, { cache: 'no-cache' });
-    if (!response.ok) throw new Error(`meta ${response.status}`);
-    const meta = await response.json();
-    const label = formatUpdatedAt(meta.generated_at);
-    if (!label) throw new Error('invalid generated_at');
-    els.updatedAt.dateTime = meta.generated_at;
-    els.updatedAt.textContent = `更新 ${label}`;
-  } catch (error) {
-    console.warn('updated_at', error);
+  const candidates = [
+    new URL('./data/meta.json', window.location.href).href,
+    new URL('./data/manifest.json', window.location.href).href
+  ];
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { cache: 'no-cache' });
+      if (!response.ok) continue;
+      const meta = await response.json();
+      const generated = meta.generated_at;
+      const label = formatUpdatedAt(generated);
+      if (!generated || !label) continue;
+      els.updatedAt.dateTime = generated;
+      els.updatedAt.textContent = `更新 ${label}`;
+      return;
+    } catch (error) {
+      console.warn('updated_at', url, error);
+    }
+  }
+  if (!els.updatedAt.textContent || els.updatedAt.textContent.includes('—')) {
     els.updatedAt.textContent = '更新 —';
   }
 }
@@ -784,24 +796,24 @@ function csvRowValues(row) {
   if (state.tab === 'smd') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.prefecture, row.district_number,
       displayPersonName(row.candidate, row.candidate_raw), row.gender, genderLabel(row.gender),
-      row.value, row.unit, row.source_code];
+      row.value, row.unit];
   }
   if (state.tab === 'muni') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.category, row.prefecture,
       row.district_number, displayLabel(row.municipality), displayLabel(row.subject), displayLabel(row.party),
-      row.value, row.unit, row.grain, row.source_code];
+      row.value, row.unit, row.grain];
   }
   if (state.tab === 'pr') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', els.geoLevel.value,
-      normalizeBlock(row.pr_block), row.prefecture, displayLabel(row.party), row.value, row.unit, row.source_code];
+      normalizeBlock(row.pr_block), row.prefecture, displayLabel(row.party), row.value, row.unit];
   }
   if (state.tab === 'turnout') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.contest, contestLabel(row.contest),
       row.scope, scopeLabel(row.scope), row.prefecture, row.metric, metricLabel(row.metric),
-      row.gender, genderLabel(row.gender), row.value, row.unit, row.source_code];
+      row.gender, genderLabel(row.gender), row.value, row.unit];
   }
   return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.prefecture, displayLabel(row.justice),
-    row.metric, metricLabel(row.metric), row.value, row.unit, row.source_code];
+    row.metric, metricLabel(row.metric), row.value, row.unit];
 }
 
 async function runSearch(event, { resetPage = true } = {}) {
@@ -862,14 +874,14 @@ async function runSearch(event, { resetPage = true } = {}) {
 
 function downloadCsv() {
   const headers = state.tab === 'smd'
-    ? ['election_kaiji', 'election_year', 'prefecture', 'district_number', 'candidate', 'gender', 'gender_label', 'value', 'unit', 'source_code']
+    ? ['election_kaiji', 'election_year', 'prefecture', 'district_number', 'candidate', 'gender', 'gender_label', 'value', 'unit']
     : state.tab === 'muni'
-      ? ['election_kaiji', 'election_year', 'category', 'prefecture', 'district_number', 'municipality', 'subject', 'party', 'value', 'unit', 'grain', 'source_code']
+      ? ['election_kaiji', 'election_year', 'category', 'prefecture', 'district_number', 'municipality', 'subject', 'party', 'value', 'unit', 'grain']
       : state.tab === 'pr'
-        ? ['election_kaiji', 'election_year', 'geo_level', 'pr_block', 'prefecture', 'party', 'value', 'unit', 'source_code']
+        ? ['election_kaiji', 'election_year', 'geo_level', 'pr_block', 'prefecture', 'party', 'value', 'unit']
         : state.tab === 'turnout'
-          ? ['election_kaiji', 'election_year', 'contest', 'contest_label', 'scope', 'scope_label', 'prefecture', 'metric', 'metric_label', 'gender', 'gender_label', 'value', 'unit', 'source_code']
-          : ['election_kaiji', 'election_year', 'prefecture', 'justice', 'metric', 'metric_label', 'value', 'unit', 'source_code'];
+          ? ['election_kaiji', 'election_year', 'contest', 'contest_label', 'scope', 'scope_label', 'prefecture', 'metric', 'metric_label', 'gender', 'gender_label', 'value', 'unit']
+          : ['election_kaiji', 'election_year', 'prefecture', 'justice', 'metric', 'metric_label', 'value', 'unit'];
   const quote = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
   const csv = '\uFEFF' + [headers.join(','), ...state.rows.map((row) => csvRowValues(row).map(quote).join(','))].join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));

@@ -6,7 +6,7 @@
   <meta name="description" content="総務省の衆議院議員総選挙結果を、小選挙区・比例代表・投票有権者・国民審査ごとに検索できるデータベースです。">
   <title>衆院選データ横断検索β</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=20260808e">
 </head>
 <body>
   <header class="masthead">
@@ -15,7 +15,7 @@
       <span>衆院選データ横断検索β</span>
     </a>
     <div class="masthead-right">
-      <time id="updated-at" class="updated-at" datetime="">更新 —</time>
+      <time id="updated-at" class="updated-at" datetime="2026-08-08T10:40:05.614736+00:00">更新 2026-08-08 19:40:05</time>
       <a class="github-link" href="https://github.com/skbnw/soumu-election" target="_blank" rel="noreferrer">GitHub ↗</a>
     </div>
   </header>
@@ -124,14 +124,14 @@
     <section class="about">
       <div><p class="section-number">ABOUT</p><h2>データについて</h2></div>
       <div class="about-copy">
-        <p>各レコードには総務省資料のファイル名、シート、セル位置につながる情報を保持しています。候補者名は検索しやすい表記と原資料表記を併記し、原資料を上書きしません。</p>
-        <p>市区町村タブでは、選んだ市区町村について小選挙区得票・比例代表得票を一覧できます。有権者・投票と国民審査は都道府県単位の参考値として併記します。</p>
-        <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ずリンク先の総務省資料も確認してください。</p>
+        <p>検索結果は選挙回・地域・候補者・政党などの条件で絞り込み、表示中の行をCSVとして保存できます。分析用データには総務省資料への出典座標も保持していますが、画面の一覧には出典列を出していません。</p>
+        <p>人名は漢字表記を基本に表示し、読み仮名は検索時にも使えます。市区町村タブでは小選挙区・比例の市区町村別得票に加え、都道府県単位の有権者・投票と国民審査を参考表示します。</p>
+        <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ず総務省の原資料も確認してください。</p>
       </div>
     </section>
   </main>
 
   <footer><span>DATA FROM MINISTRY OF INTERNAL AFFAIRS AND COMMUNICATIONS</span><span>Built with DuckDB-Wasm</span></footer>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=20260808e"></script>
 </body>
 </html>

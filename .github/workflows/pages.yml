@@ -28,6 +28,40 @@ jobs:
           cp -R web/. _site/
           cp data/warehouse/parquet/*.parquet _site/data/
           cp data/warehouse/manifest.json _site/data/manifest.json
+          python3 - <<'PY'
+          import json
+          import re
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          site = Path("_site")
+          manifest = json.loads(Path("data/warehouse/manifest.json").read_text(encoding="utf-8"))
+          generated = manifest.get("generated_at") or datetime.now(timezone.utc).isoformat()
+          meta = {
+              "generated_at": generated,
+              "election_kaiji": manifest.get("election_kaiji"),
+              "facts": (manifest.get("counts") or {}).get("facts"),
+          }
+          (site / "data" / "meta.json").write_text(
+              json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          dt = datetime.fromisoformat(generated.replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=9)))
+          label = dt.strftime("%Y-%m-%d %H:%M:%S")
+          stamp = dt.strftime("%Y%m%d%H%M%S")
+          html_path = site / "index.html"
+          html = html_path.read_text(encoding="utf-8")
+          html = re.sub(
+              r'<time id="updated-at"[^>]*>.*?</time>',
+              f'<time id="updated-at" class="updated-at" datetime="{generated}">更新 {label}</time>',
+              html,
+              count=1,
+              flags=re.S,
+          )
+          html = re.sub(r"\./styles\.css(?:\?v=[^\"']*)?", f"./styles.css?v={stamp}", html)
+          html = re.sub(r"\./app\.js(?:\?v=[^\"']*)?", f"./app.js?v={stamp}", html)
+          html_path.write_text(html, encoding="utf-8")
+          print("stamped updated-at", label)
+          PY
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
         with:
