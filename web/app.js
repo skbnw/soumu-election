@@ -23,7 +23,8 @@ async function init() {
     state.db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
     await state.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
-    await state.db.registerFileURL('facts.parquet', './data/facts.parquet', duckdb.DuckDBDataProtocol.HTTP, false);
+    const factsUrl = new URL('./data/facts.parquet', window.location.href).href;
+    await state.db.registerFileURL('facts.parquet', factsUrl, duckdb.DuckDBDataProtocol.HTTP, false);
     state.conn = await state.db.connect();
     const dimensions = await state.conn.query(`
       SELECT list_sort(list_distinct(list(election_kaiji))) elections,
