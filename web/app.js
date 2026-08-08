@@ -1,6 +1,7 @@
 /*
  * 総務省選挙データ横断検索β — DuckDB-Wasm 検索
- * v2.9.2
+ * v2.9.3
+ * - 衆院小選挙区に当落・党派・相対得票率・惜敗率を表示
  * - 参院第25回（2019）を接続
  * - 市区町村名の選挙区接尾辞を統一（全角括弧＋半角数字）
  * - CSV保存を廃止（画面閲覧のみ）
@@ -71,6 +72,21 @@ function formatValue(value, unit) {
   if (!Number.isFinite(n)) return String(value);
   if (unit === 'votes' || unit === 'people') return displayVotes.format(Math.round(n));
   return displayNumber.format(n);
+}
+
+const displayPercent = new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+
+function formatPercent(value) {
+  if (value == null || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return `${displayPercent.format(n)}%`;
+}
+
+function electedLabel(elected) {
+  if (elected === true || elected === 'true') return '当選';
+  if (elected === false || elected === 'false') return '落選';
+  return '—';
 }
 
 /** 氏名・党派名の文字間空白を除去 */
@@ -254,7 +270,7 @@ const GEO_LEVEL_LABELS = {
 const TABS = {
   smd: {
     title: '小選挙区',
-    note: '選挙区単位の候補者得票（2005-衆44回〜2026-衆51回）。衆49回以降は総務省表に性別列がないため性別は空欄です。',
+    note: '選挙区単位の候補者得票（2005-衆44回〜2026-衆51回）。当落・相対得票率・惜敗率は総務省表と選挙区内集計から表示します。衆49回以降は性別列がないため性別は空欄です。',
     keywordLabel: '候補者名',
     keywordPlaceholder: '例：道下大樹',
     metrics: [{ value: 'candidate_votes', label: '候補者得票' }],
@@ -345,7 +361,7 @@ function currentHeaders() {
   if (state.tab === 'smd') {
     return state.chamber === 'sangiin'
       ? ['選挙', '県区', '定数', '候補者', '党派', '得票', '単位']
-      : ['選挙', '都道府県', '選挙区', '候補者', '性別', '得票', '単位'];
+      : ['選挙', '都道府県', '選挙区', '候補者', '党派', '当落', '得票', '相対得票率', '惜敗率', '性別'];
   }
   if (state.tab === 'muni') return ['選挙', '区分', '都道府県', '選挙区', '市区町村', '項目', '党派', '値', '単位', '粒度'];
   if (state.tab === 'pr') return prHeaders();
@@ -750,7 +766,28 @@ function selectSql() {
         ${limitOffsetSql()}`;
     }
     return `SELECT election_kaiji, prefecture, prefecture_code, district_number,
-      candidate, candidate_raw, gender, value, unit, source_code
+      candidate, candidate_raw, party, gender, elected, value, unit, source_code,
+      CASE
+        WHEN sum(value) OVER (
+          PARTITION BY election_kaiji, prefecture, district_number
+        ) > 0
+        THEN 100.0 * value / sum(value) OVER (
+          PARTITION BY election_kaiji, prefecture, district_number
+        )
+        ELSE NULL
+      END AS relative_share,
+      coalesce(
+        sekihairitsu,
+        CASE
+          WHEN max(CASE WHEN elected THEN value END) OVER (
+            PARTITION BY election_kaiji, prefecture, district_number
+          ) > 0
+          THEN 100.0 * value / max(CASE WHEN elected THEN value END) OVER (
+            PARTITION BY election_kaiji, prefecture, district_number
+          )
+          ELSE NULL
+        END
+      ) AS sekihai_rate
       FROM read_parquet('facts.parquet') WHERE ${whereClauseSmd()}
       ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, district_number NULLS LAST, value DESC NULLS LAST
       ${limitOffsetSql()}`;
@@ -1029,9 +1066,12 @@ function renderRows() {
       <td>${html(row.prefecture)}</td>
       <td>${html(districtLabel(row.district_number))}</td>
       <td>${html(displayPersonName(row.candidate, row.candidate_raw))}</td>
-      <td>${html(genderLabel(row.gender))}</td>
+      <td>${html(displayLabel(row.party))}</td>
+      <td>${html(electedLabel(row.elected))}</td>
       <td class="numeric">${formatValue(row.value, row.unit)}</td>
-      <td>${html(row.unit)}</td></tr>`).join('');
+      <td class="numeric">${html(formatPercent(row.relative_share))}</td>
+      <td class="numeric">${html(formatPercent(row.sekihai_rate))}</td>
+      <td>${html(genderLabel(row.gender))}</td></tr>`).join('');
     return;
   }
 
@@ -1133,7 +1173,9 @@ async function runSearch(event, { resetPage = true } = {}) {
   }
   const headers = currentHeaders();
   els.head.innerHTML = headers.map((h) => (
-    h === '得票' || h === '値' ? `<th class="numeric">${h}</th>` : `<th>${h}</th>`
+    h === '得票' || h === '値' || h === '相対得票率' || h === '惜敗率'
+      ? `<th class="numeric">${h}</th>`
+      : `<th>${h}</th>`
   )).join('');
   els.form.dataset.geolevel = els.geoLevel.value || 'prefecture';
   els.search.disabled = true;
