@@ -1,8 +1,10 @@
 /*
  * 総務省選挙データ横断検索β — DuckDB-Wasm 検索
- * v2.5.0
- * - サイト名変更、衆院/参院チャンバー切替（参院は建設中）
- * - 選挙表記を「2026-衆51回」形式へ（参院導入を見据え chamber 付き）
+ * v2.6.0
+ * - 参院第27回を倉庫に接続（投票・比例の全国／都道府県）
+ * - election_id で衆院/参院を分離フィルタ
+ * - サイト名変更、衆院/参院チャンバー切替
+ * - 選挙表記を「2026-衆51回」形式へ（参院は「2025-参27回」）
  * - 更新日時の表示を強化（meta / manifest フォールバック、HTML初期値）
  * - CSVから source_code（出典）列を除外
  * - 人名表示は漢字を基本（かなは candidate_raw 経由で検索ヒット）
@@ -183,7 +185,7 @@ const ELECTION_YEARS = {
     48: 2017, 49: 2021, 50: 2024, 51: 2026
   },
   sangiin: {
-    // 参院取込時に回次→投票年を追加
+    27: 2025
   }
 };
 
@@ -221,7 +223,13 @@ const PREFECTURE_RANK = Object.fromEntries(PREFECTURE_ORDER.map((name, i) => [na
 const PR_BLOCK_ORDER = ['北海道', '東北', '北関東', '南関東', '東京都', '北陸信越', '東海', '近畿', '中国', '四国', '九州', '全国'];
 const PR_BLOCK_RANK = Object.fromEntries(PR_BLOCK_ORDER.map((name, i) => [name, i]));
 
-const CONTEST_LABELS = { smd: '小選挙区', pr: '比例代表', judicial_review: '国民審査', all: '全体' };
+const CONTEST_LABELS = {
+  smd: '小選挙区',
+  district: '選挙区',
+  pr: '比例代表',
+  judicial_review: '国民審査',
+  all: '全体'
+};
 const SCOPE_LABELS = { all: '全体', overseas: '在外' };
 const GENDER_LABELS = { total: '計', male: '男', female: '女' };
 const METRIC_LABELS = {
@@ -303,6 +311,7 @@ function prHeaders() {
   const level = els.geoLevel.value;
   if (level === 'national') return ['選挙', '政党', '得票', '単位'];
   if (level === 'block') return ['選挙', '比例ブロック', '政党', '得票', '単位'];
+  if (state.chamber === 'sangiin') return ['選挙', '区分', '都道府県', '政党', '得票', '単位'];
   return ['選挙', '比例ブロック', '都道府県', '政党', '得票', '単位'];
 }
 
@@ -364,8 +373,9 @@ function fillSelect(select, options, { keepAll = true, allLabel = 'すべて' } 
 }
 
 function refreshElectionOptions() {
-  const elections = state.electionsByTab[state.tab] ?? [];
-  fillSelect(els.election, elections.map((v) => ({ value: String(v), label: electionLabel(v) })));
+  const byChamber = state.electionsByChamber?.[state.chamber];
+  const elections = byChamber?.[state.tab] ?? state.electionsByTab[state.tab] ?? [];
+  fillSelect(els.election, elections.map((v) => ({ value: String(v), label: electionLabel(v, state.chamber) })));
 }
 
 function refreshDistrictOptions() {
@@ -409,15 +419,51 @@ function refreshPrefectureOptions() {
 function refreshPartyOptions() {
   if (!els.prParty) return;
   const kaiji = els.election.value ? Number(els.election.value) : null;
+  const eid = kaiji != null ? `${chamberPrefix()}${kaiji}` : null;
   let parties = [];
-  if (kaiji != null && state.partiesByElection[kaiji]) {
+  if (eid && state.partiesByElection[eid]) {
+    parties = state.partiesByElection[eid];
+  } else if (state.chamber === 'shugiin' && kaiji != null && state.partiesByElection[kaiji]) {
     parties = state.partiesByElection[kaiji];
   } else {
-    // 選挙回未指定時は最新回の全国得票順を使う
-    const latest = (state.electionsByTab.pr ?? [])[0];
-    parties = latest != null ? (state.partiesByElection[latest] ?? []) : [];
+    const latest = (state.electionsByChamber?.[state.chamber]?.pr
+      ?? state.electionsByTab.pr ?? [])[0];
+    if (latest != null) {
+      parties = state.partiesByElection[`${chamberPrefix()}${latest}`]
+        ?? (state.chamber === 'shugiin' ? state.partiesByElection[latest] : [])
+        ?? [];
+    }
   }
   fillSelect(els.prParty, parties.map((name) => ({ value: name, label: name })));
+}
+
+function chamberPrefix() {
+  return state.chamber === 'sangiin' ? 'sangiin-' : 'shugiin-';
+}
+
+function chamberSql() {
+  return `election_id LIKE '${chamberPrefix()}%'`;
+}
+
+function syncContestOptions() {
+  if (!els.contest) return;
+  const current = els.contest.value;
+  if (state.chamber === 'sangiin') {
+    els.contest.innerHTML = [
+      '<option value="">すべて</option>',
+      '<option value="district">選挙区</option>',
+      '<option value="pr">比例代表</option>'
+    ].join('');
+  } else {
+    els.contest.innerHTML = [
+      '<option value="">すべて</option>',
+      '<option value="smd">小選挙区</option>',
+      '<option value="pr">比例代表</option>',
+      '<option value="judicial_review">国民審査</option>'
+    ].join('');
+  }
+  const values = [...els.contest.options].map((o) => o.value);
+  els.contest.value = values.includes(current) ? current : '';
 }
 
 function applyChamber(chamberId) {
@@ -427,12 +473,51 @@ function applyChamber(chamberId) {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-selected', active ? 'true' : 'false');
   });
-  if (els.chamberShugiin) els.chamberShugiin.hidden = state.chamber !== 'shugiin';
+  if (els.chamberShugiin) els.chamberShugiin.hidden = false;
   if (els.chamberSangiin) els.chamberSangiin.hidden = state.chamber !== 'sangiin';
+
+  const cov = state.electionsByChamber?.[state.chamber];
+  if (cov) {
+    state.electionsByTab = {
+      smd: cov.smd ?? [],
+      pr: cov.pr ?? [],
+      turnout: cov.turnout ?? [],
+      judicial: cov.judicial ?? [],
+      muni: cov.muni ?? []
+    };
+    state.allPrefectures = cov.prefectures ?? state.allPrefectures;
+  }
+
+  $$('.tab').forEach((button) => {
+    const tab = button.dataset.tab;
+    const sangiinOk = tab === 'turnout' || tab === 'pr';
+    const allowed = state.chamber === 'shugiin' || sangiinOk;
+    button.hidden = !allowed;
+    button.disabled = !allowed;
+  });
+
+  // 参院の比例はブロックなし → ブロック選択肢を隠す
+  const blockOpt = els.geoLevel && [...els.geoLevel.options].find((o) => o.value === 'block');
+  if (blockOpt) blockOpt.hidden = state.chamber === 'sangiin';
+  if (state.chamber === 'sangiin' && els.geoLevel?.value === 'block') {
+    els.geoLevel.value = 'national';
+  }
+
+  syncContestOptions();
+
+  const fallbackTab = state.chamber === 'sangiin'
+    ? (['turnout', 'pr'].includes(state.tab) ? state.tab : 'turnout')
+    : (TABS[state.tab] ? state.tab : 'smd');
+  if (state.ready) {
+    refreshElectionOptions();
+    applyTab(fallbackTab, { search: true });
+  }
 }
 
 function applyTab(tabId, { search = true } = {}) {
-  if (state.chamber !== 'shugiin') applyChamber('shugiin');
+  if (state.chamber === 'sangiin' && !['turnout', 'pr'].includes(tabId)) {
+    tabId = 'turnout';
+  }
   state.tab = tabId;
   const tab = TABS[tabId];
   els.form.dataset.tab = tabId;
@@ -442,7 +527,9 @@ function applyTab(tabId, { search = true } = {}) {
   els.prBlock.value = '';
   if (els.prParty) els.prParty.value = '';
   els.prefecture.value = '';
-  if (tabId === 'pr') els.geoLevel.value = 'prefecture';
+  if (tabId === 'pr') {
+    els.geoLevel.value = state.chamber === 'sangiin' ? 'national' : 'prefecture';
+  }
   if (tabId === 'turnout') els.scope.value = 'all';
   els.form.dataset.geolevel = els.geoLevel.value || 'prefecture';
   $$('.tab').forEach((button) => {
@@ -450,7 +537,13 @@ function applyTab(tabId, { search = true } = {}) {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-selected', active ? 'true' : 'false');
   });
-  els.tabNote.textContent = tab.note;
+  if (tabId === 'pr' && state.chamber === 'sangiin') {
+    els.tabNote.textContent = '参院第27回の政党得票です。全国は党派比較、都道府県は選挙区の党派得票を表示します（候補者・市区町村は準備中）。';
+  } else if (tabId === 'turnout' && state.chamber === 'sangiin') {
+    els.tabNote.textContent = '参院第27回の都道府県単位の有権者数・投票者数・投票率です。選挙区／比例を切り替えられます。';
+  } else {
+    els.tabNote.textContent = tab.note;
+  }
 
   els.metric.innerHTML = tab.metrics.map((m) => `<option value="${m.value}">${m.label}</option>`).join('');
   if (tab.fixedMetric) els.metric.value = tab.fixedMetric;
@@ -490,6 +583,7 @@ function commonFilters({ includePref = true, includeDistrict = false, includeMun
 
 function whereClauseSmd() {
   const parts = [
+    chamberSql(),
     `metric = 'candidate_votes'`,
     `contest = 'smd'`,
     ...commonFilters({ includePref: true, includeDistrict: true })
@@ -538,7 +632,7 @@ function whereClausePrefRelated() {
 }
 
 function whereClauseTurnout() {
-  const parts = [`metric = '${escapeSql(els.metric.value)}'`];
+  const parts = [chamberSql(), `metric = '${escapeSql(els.metric.value)}'`];
   if (els.contest.value) parts.push(`contest = '${escapeSql(els.contest.value)}'`);
   if (els.scope.value === 'all') parts.push(`(scope = 'all' OR scope IS NULL)`);
   else if (els.scope.value) parts.push(`scope = '${escapeSql(els.scope.value)}'`);
@@ -548,6 +642,7 @@ function whereClauseTurnout() {
 
 function whereClauseJudicial() {
   const parts = [
+    chamberSql(),
     `metric = '${escapeSql(els.metric.value)}'`,
     `contest = 'judicial_review'`,
     ...commonFilters({ includePref: true })
@@ -666,10 +761,14 @@ function selectSql() {
     const prefFilter = els.prefecture.value ? `AND prefecture = '${escapeSql(els.prefecture.value)}'` : '';
 
     if (level === 'national') {
+      const sourceFilter = state.chamber === 'sangiin'
+        ? ``
+        : `AND source_code = '03-05'`;
       return `
         SELECT election_kaiji, '全国' AS pr_block, party, value, unit, source_code
         FROM read_parquet('facts.parquet')
-        WHERE metric = 'current_votes' AND contest = 'pr' AND source_code = '03-05'
+        WHERE ${chamberSql()}
+          AND metric = 'current_votes' AND contest = 'pr' ${sourceFilter}
           ${partyNotTotal} ${electionFilter} ${partyFilter}
           AND coalesce(party, '') NOT IN ('合計', '計', '諸派')
         ORDER BY election_kaiji DESC, value DESC NULLS LAST
@@ -677,14 +776,40 @@ function selectSql() {
     }
 
     if (level === 'block') {
+      if (state.chamber === 'sangiin') {
+        return `
+          SELECT election_kaiji, '—' AS pr_block, party, value, unit, source_code
+          FROM read_parquet('facts.parquet')
+          WHERE 1=0 ${limitOffsetSql()}`;
+      }
       return `
         SELECT election_kaiji, replace(pr_block, '選挙区', '') AS pr_block, party,
                max(value) AS value, any_value(unit) AS unit, any_value(source_code) AS source_code
         FROM read_parquet('facts.parquet')
-        WHERE metric = 'party_votes' AND contest = 'pr' AND source_code = '03-10'
+        WHERE ${chamberSql()}
+          AND metric = 'party_votes' AND contest = 'pr' AND source_code = '03-10'
           ${electionFilter} ${blockFilter} ${partyNotTotal} ${partyFilter}
         GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), party
         ORDER BY election_kaiji DESC, value DESC NULLS LAST
+        ${limitOffsetSql()}`;
+    }
+
+    if (state.chamber === 'sangiin') {
+      // 参院は当面、選挙区の都道府県別党派得票を比例タブの都道府県表示に使う
+      return `
+        SELECT election_kaiji, '選挙区' AS pr_block,
+               prefecture, any_value(prefecture_code) AS prefecture_code, party,
+               max(value) AS value,
+               any_value(unit) AS unit, any_value(source_code) AS source_code
+        FROM read_parquet('facts.parquet')
+        WHERE ${chamberSql()}
+          AND metric = 'party_votes' AND contest = 'district'
+          AND prefecture IS NOT NULL
+          AND prefecture NOT IN ('計', '合計', '全国')
+          AND gender = 'total'
+          ${electionFilter} ${prefFilter} ${partyNotTotal} ${partyFilter}
+        GROUP BY election_kaiji, prefecture, party
+        ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, value DESC NULLS LAST
         ${limitOffsetSql()}`;
     }
 
@@ -694,14 +819,15 @@ function selectSql() {
              max(value) AS value,
              any_value(unit) AS unit, any_value(source_code) AS source_code
       FROM read_parquet('facts.parquet')
-      WHERE metric = 'party_votes' AND contest = 'pr' AND source_code = '03-07'
+      WHERE ${chamberSql()}
+        AND metric = 'party_votes' AND contest = 'pr' AND source_code = '03-07'
         AND prefecture IS NOT NULL
         AND prefecture NOT IN ('計', '合計', '全国')
         ${electionFilter} ${blockFilter} ${prefFilter} ${partyNotTotal} ${partyFilter}
       GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), prefecture, party
       ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, value DESC NULLS LAST
       ${limitOffsetSql()}`;
-    }
+  }
 
   if (state.tab === 'turnout') {
     return `SELECT election_kaiji, contest, scope, prefecture, prefecture_code,
@@ -752,7 +878,7 @@ function renderRows() {
 
   if (state.tab === 'smd') {
     els.results.innerHTML = sorted.map((row) => `<tr>
-      <td>${html(electionLabel(row.election_kaiji))}</td>
+      <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
       <td>${html(row.prefecture)}</td>
       <td>${html(districtLabel(row.district_number))}</td>
       <td>${html(displayPersonName(row.candidate, row.candidate_raw))}</td>
@@ -765,7 +891,7 @@ function renderRows() {
   if (state.tab === 'muni') {
     const grainLabel = (grain) => (grain === 'prefecture' ? '都道府県' : '市区町村');
     els.results.innerHTML = sorted.map((row) => `<tr>
-      <td>${html(electionLabel(row.election_kaiji))}</td>
+      <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
       <td>${html(row.category)}</td>
       <td>${html(row.prefecture)}</td>
       <td>${html(districtLabel(row.district_number))}</td>
@@ -784,21 +910,21 @@ function renderRows() {
       const block = normalizeBlock(row.pr_block);
       if (level === 'national') {
         return `<tr>
-          <td>${html(electionLabel(row.election_kaiji))}</td>
+          <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
           <td>${html(displayLabel(row.party))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td>${html(row.unit)}</td></tr>`;
       }
       if (level === 'block') {
         return `<tr>
-          <td>${html(electionLabel(row.election_kaiji))}</td>
+          <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
           <td>${html(block)}</td>
           <td>${html(displayLabel(row.party))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td>${html(row.unit)}</td></tr>`;
       }
       return `<tr>
-        <td>${html(electionLabel(row.election_kaiji))}</td>
+        <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
         <td>${html(block)}</td>
         <td>${html(row.prefecture)}</td>
         <td>${html(displayLabel(row.party))}</td>
@@ -810,7 +936,7 @@ function renderRows() {
 
   if (state.tab === 'turnout') {
     els.results.innerHTML = sorted.map((row) => `<tr>
-      <td>${html(electionLabel(row.election_kaiji))}</td>
+      <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
       <td>${html(contestLabel(row.contest))}</td>
       <td>${html(scopeLabel(row.scope))}</td>
       <td>${html(row.prefecture)}</td>
@@ -822,7 +948,7 @@ function renderRows() {
   }
 
   els.results.innerHTML = sorted.map((row) => `<tr>
-    <td>${html(electionLabel(row.election_kaiji))}</td>
+    <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
     <td>${html(row.prefecture)}</td>
     <td>${html(displayLabel(row.justice))}</td>
     <td>${html(metricLabel(row.metric))}</td>
@@ -832,29 +958,29 @@ function renderRows() {
 
 function csvRowValues(row) {
   if (state.tab === 'smd') {
-    return [electionLabel(row.election_kaiji), row.election_kaiji, electionYear(row.election_kaiji),
+    return [electionLabel(row.election_kaiji, state.chamber), row.election_kaiji, electionYear(row.election_kaiji, state.chamber),
       row.prefecture, row.district_number,
       displayPersonName(row.candidate, row.candidate_raw), row.gender, genderLabel(row.gender),
       row.value, row.unit];
   }
   if (state.tab === 'muni') {
-    return [electionLabel(row.election_kaiji), row.election_kaiji, electionYear(row.election_kaiji),
+    return [electionLabel(row.election_kaiji, state.chamber), row.election_kaiji, electionYear(row.election_kaiji, state.chamber),
       row.category, row.prefecture,
       row.district_number, displayLabel(row.municipality), displayLabel(row.subject), displayLabel(row.party),
       row.value, row.unit, row.grain];
   }
   if (state.tab === 'pr') {
-    return [electionLabel(row.election_kaiji), row.election_kaiji, electionYear(row.election_kaiji),
+    return [electionLabel(row.election_kaiji, state.chamber), row.election_kaiji, electionYear(row.election_kaiji, state.chamber),
       els.geoLevel.value,
       normalizeBlock(row.pr_block), row.prefecture, displayLabel(row.party), row.value, row.unit];
   }
   if (state.tab === 'turnout') {
-    return [electionLabel(row.election_kaiji), row.election_kaiji, electionYear(row.election_kaiji),
+    return [electionLabel(row.election_kaiji, state.chamber), row.election_kaiji, electionYear(row.election_kaiji, state.chamber),
       row.contest, contestLabel(row.contest),
       row.scope, scopeLabel(row.scope), row.prefecture, row.metric, metricLabel(row.metric),
       row.gender, genderLabel(row.gender), row.value, row.unit];
   }
-  return [electionLabel(row.election_kaiji), row.election_kaiji, electionYear(row.election_kaiji),
+  return [electionLabel(row.election_kaiji, state.chamber), row.election_kaiji, electionYear(row.election_kaiji, state.chamber),
     row.prefecture, displayLabel(row.justice),
     row.metric, metricLabel(row.metric), row.value, row.unit];
 }
@@ -936,28 +1062,45 @@ function downloadCsv() {
 }
 
 async function loadCoverage() {
-  const coverage = await state.conn.query(`
-    SELECT
-      list_sort(list_distinct(list(election_kaiji) FILTER (WHERE metric = 'candidate_votes' AND contest = 'smd'))) smd_elections,
-      list_sort(list_distinct(list(election_kaiji) FILTER (WHERE metric = 'party_votes' AND contest = 'pr'))) pr_elections,
-      list_sort(list_distinct(list(election_kaiji) FILTER (WHERE metric IN ('eligible_voters','voters','turnout_rate')))) turnout_elections,
-      list_sort(list_distinct(list(election_kaiji) FILTER (WHERE contest = 'judicial_review'))) judicial_elections,
-      list_sort(list_distinct(list(prefecture) FILTER (WHERE prefecture IS NOT NULL))) prefectures,
-      count(*) AS fact_count
-    FROM read_parquet('facts.parquet')`);
-  const values = coverage.toArray()[0].toJSON();
-  const toNums = (list) => Array.from(list ?? []).map(Number).sort((a, b) => b - a);
-  state.electionsByTab.smd = toNums(values.smd_elections);
-  state.electionsByTab.pr = toNums(values.pr_elections);
-  state.electionsByTab.turnout = toNums(values.turnout_elections);
-  state.electionsByTab.judicial = toNums(values.judicial_elections);
-  state.allPrefectures = sortPrefectures(Array.from(values.prefectures ?? []).map(String));
-  state.factCount = Number(values.fact_count ?? 0);
+  const loadFor = async (prefix) => {
+    const coverage = await state.conn.query(`
+      SELECT
+        list_sort(list_distinct(list(election_kaiji) FILTER (WHERE metric = 'candidate_votes' AND contest = 'smd'))) smd_elections,
+        list_sort(list_distinct(list(election_kaiji) FILTER (
+          WHERE metric IN ('party_votes', 'current_votes') AND contest IN ('pr', 'district')
+        ))) pr_elections,
+        list_sort(list_distinct(list(election_kaiji) FILTER (WHERE metric IN ('eligible_voters','voters','turnout_rate')))) turnout_elections,
+        list_sort(list_distinct(list(election_kaiji) FILTER (WHERE contest = 'judicial_review'))) judicial_elections,
+        list_sort(list_distinct(list(prefecture) FILTER (WHERE prefecture IS NOT NULL))) prefectures,
+        count(*) AS fact_count
+      FROM read_parquet('facts.parquet')
+      WHERE election_id LIKE '${prefix}%'`);
+    const values = coverage.toArray()[0].toJSON();
+    const toNums = (list) => Array.from(list ?? []).map(Number).sort((a, b) => b - a);
+    return {
+      smd: toNums(values.smd_elections),
+      pr: toNums(values.pr_elections),
+      turnout: toNums(values.turnout_elections),
+      judicial: toNums(values.judicial_elections),
+      muni: [],
+      prefectures: sortPrefectures(Array.from(values.prefectures ?? []).map(String)),
+      factCount: Number(values.fact_count ?? 0)
+    };
+  };
+
+  state.electionsByChamber = {
+    shugiin: await loadFor('shugiin-'),
+    sangiin: await loadFor('sangiin-')
+  };
+  state.electionsByTab = state.electionsByChamber.shugiin;
+  state.allPrefectures = state.electionsByChamber.shugiin.prefectures;
+  state.factCount = state.electionsByChamber.shugiin.factCount + state.electionsByChamber.sangiin.factCount;
 
   const districts = await state.conn.query(`
     SELECT prefecture, list_sort(list_distinct(list(district_number))) districts
     FROM read_parquet('facts.parquet')
     WHERE metric = 'candidate_votes' AND contest = 'smd' AND district_number IS NOT NULL
+      AND election_id LIKE 'shugiin-%'
     GROUP BY prefecture`);
   state.districtsByPref = {};
   for (const row of districts.toArray()) {
@@ -972,7 +1115,9 @@ async function loadCoverage() {
       FROM read_parquet('municipality_facts.parquet')
       WHERE prefecture IS NOT NULL`);
     const meta = muniMeta.toArray()[0].toJSON();
+    const toNums = (list) => Array.from(list ?? []).map(Number).sort((a, b) => b - a);
     state.electionsByTab.muni = toNums(meta.elections);
+    state.electionsByChamber.shugiin.muni = state.electionsByTab.muni;
     state.muniPrefectures = sortPrefectures(Array.from(meta.prefectures ?? []).map(String));
 
     const muniDistricts = await state.conn.query(`
@@ -993,20 +1138,29 @@ async function loadCoverage() {
 
   fillSelect(els.prBlock, PR_BLOCK_ORDER.filter((b) => b !== '全国').map((v) => ({ value: v, label: v })));
 
-  // 選挙回ごとの全国得票順政党リスト（比例ブロック得票の合計）
   const partyRows = await state.conn.query(`
-    SELECT election_kaiji, party, max(value) AS votes
+    SELECT election_id, election_kaiji, party, max(value) AS votes
     FROM read_parquet('facts.parquet')
-    WHERE metric = 'current_votes' AND contest = 'pr' AND source_code = '03-05'
+    WHERE metric = 'current_votes' AND contest = 'pr'
       AND coalesce(party, '') NOT IN ('', '合計', '計', '諸派')
-    GROUP BY election_kaiji, party
+      AND (
+        (election_id LIKE 'shugiin-%' AND source_code = '03-05')
+        OR election_id LIKE 'sangiin-%'
+      )
+    GROUP BY election_id, election_kaiji, party
     ORDER BY election_kaiji, votes DESC NULLS LAST, party`);
   state.partiesByElection = {};
   for (const row of partyRows.toArray()) {
     const item = row.toJSON();
+    const key = String(item.election_id || `shugiin-${item.election_kaiji}`);
+    if (!state.partiesByElection[key]) state.partiesByElection[key] = [];
+    state.partiesByElection[key].push(String(item.party));
+    // 互換: 回次キーも残す（衆院）
     const kaiji = Number(item.election_kaiji);
-    if (!state.partiesByElection[kaiji]) state.partiesByElection[kaiji] = [];
-    state.partiesByElection[kaiji].push(String(item.party));
+    if (String(item.election_id || '').startsWith('shugiin-')) {
+      if (!state.partiesByElection[kaiji]) state.partiesByElection[kaiji] = [];
+      state.partiesByElection[kaiji].push(String(item.party));
+    }
   }
 }
 
@@ -1039,6 +1193,7 @@ async function init() {
     setControlsEnabled(true);
     els.status.className = 'status ready';
     els.status.innerHTML = `<span class="pulse"></span>${displayNumber.format(state.factCount)}件を読み込み済み`;
+    applyChamber('shugiin');
     applyTab('smd');
   } catch (error) {
     console.error(error);

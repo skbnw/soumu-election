@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# v1.1.0: --sangiin-kaiji 対応、election_id={chamber}-{kaiji}、web meta に election_ids を出力
 """Build the cross-election DuckDB and Parquet dataset from normalized JSON."""
 
 from __future__ import annotations
@@ -41,9 +42,12 @@ def stable_id(prefix: str, *values: Any) -> str:
 
 
 def fact_row(item: dict[str, Any]) -> tuple[Any, ...]:
-    election_id = f"shugiin-{item['election_kaiji']}"
+    chamber = item.get("chamber") or item.get("election_type") or "shugiin"
+    if chamber not in {"shugiin", "sangiin"}:
+        chamber = "shugiin"
+    election_id = f"{chamber}-{item['election_kaiji']}"
     source_id = stable_id("src", election_id, item["source_file"])
-    identity = [item.get(key) for key in (
+    identity = [chamber] + [item.get(key) for key in (
         "election_kaiji", "source_file", "source_sheet", "source_cell", "contest",
         "prefecture", "pr_block", "party", "justice", "gender", "age_band",
         "candidate_status", "row_variant", "candidate", "district_number", "metric")]
@@ -61,7 +65,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build DuckDB and Parquet election warehouse")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--kaiji", type=int, nargs="*", default=list(range(44, 52)))
+    parser.add_argument("--kaiji", type=int, nargs="*", default=list(range(44, 52)),
+                        help="衆院回次（既定: 44〜51）")
+    parser.add_argument("--sangiin-kaiji", type=int, nargs="*", default=[],
+                        help="参院回次（例: 27）。指定時のみ追加取込")
     args = parser.parse_args()
     root = args.project_root.resolve()
     output = (args.output or root / "data" / "warehouse").resolve()
@@ -73,24 +80,32 @@ def main() -> int:
         db_path.unlink()
 
     elections, sources, coverage, facts = [], {}, [], []
-    for kaiji in args.kaiji:
-        config_path = root / "config" / f"shugiin{kaiji}.json"
-        fact_path = root / "data" / f"shugiin{kaiji}" / "normalized" / "facts.json"
+
+    def load_chamber(chamber: str, kaiji: int) -> None:
+        config_path = root / "config" / f"{chamber}{kaiji}.json"
+        fact_path = root / "data" / f"{chamber}{kaiji}" / "normalized" / "facts.json"
         norm_manifest_path = fact_path.parent / "manifest.json"
         if not (config_path.exists() and fact_path.exists() and norm_manifest_path.exists()):
-            raise FileNotFoundError(f"required input missing for shugiin{kaiji}")
+            raise FileNotFoundError(f"required input missing for {chamber}{kaiji}")
         config = json.loads(config_path.read_text(encoding="utf-8"))
         norm_manifest = json.loads(norm_manifest_path.read_text(encoding="utf-8"))
-        elections.append((f"shugiin-{kaiji}", "shugiin", kaiji, config.get("election_date")))
+        election_id = f"{chamber}-{kaiji}"
+        elections.append((election_id, chamber, kaiji, config.get("election_date")))
         for entry in norm_manifest["coverage"]:
-            coverage.append((f"shugiin-{kaiji}", kaiji, entry["source_code"],
+            coverage.append((election_id, kaiji, entry["source_code"],
                              entry.get("dataset"), entry["status"], entry["records"]))
         for item in json.loads(fact_path.read_text(encoding="utf-8")):
+            item = {**item, "chamber": chamber, "election_type": chamber}
             row = fact_row(item)
             facts.append(row)
             source_id = row[1]
-            sources[source_id] = (source_id, f"shugiin-{kaiji}", kaiji, item["source_code"],
+            sources[source_id] = (source_id, election_id, kaiji, item["source_code"],
                                   item["dataset"], item["source_url"], item["source_file"])
+
+    for kaiji in args.kaiji:
+        load_chamber("shugiin", kaiji)
+    for kaiji in args.sangiin_kaiji:
+        load_chamber("sangiin", kaiji)
 
     facts_ndjson = output / ".facts.ndjson"
     with facts_ndjson.open("w", encoding="utf-8") as handle:
@@ -209,9 +224,13 @@ def main() -> int:
     (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     web_meta = root / "web" / "data" / "meta.json"
     if web_meta.parent.exists():
+        election_ids = [row[0] for row in con.execute(
+            "SELECT election_id FROM elections ORDER BY election_type, election_kaiji"
+        ).fetchall()]
         web_meta.write_text(json.dumps({
             "generated_at": manifest["generated_at"],
             "election_kaiji": args.kaiji,
+            "election_ids": election_ids,
             "facts": counts.get("facts"),
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     con.close()

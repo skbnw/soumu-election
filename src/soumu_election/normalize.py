@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Create analysis-ready election facts from the lossless raw JSON layer.
 
+v1.3.0:
+- 参院（sangiin）: chamber 分岐で normalize_sangiin.SANGIIN_PARSERS を使用（項番衝突を回避）
 v1.2.1:
 - 03-07: 党派ヘッダが複数段ある表で、後半党派を誤って前半党派に割り当てないよう修正
 v1.2.0:
@@ -1615,11 +1617,19 @@ def main() -> int:
         doc = json.loads(path.read_text(encoding="utf-8"))
         code = doc.get("source_code") or path.name.split("_", 1)[0]
         doc["source_code"] = code
-        selected = PARSERS.get(code)
+        chamber = doc.get("chamber") or doc.get("election_type") or "shugiin"
+        if chamber == "sangiin":
+            from soumu_election.normalize_sangiin import SANGIIN_PARSERS
+            selected = SANGIIN_PARSERS.get(code)
+        else:
+            selected = PARSERS.get(code)
         before = len(facts)
         if selected and "sheets" in doc:
             for sheet in doc["sheets"]:
                 facts.extend(selected(doc, sheet, matrix(doc, sheet)))
+        elif chamber == "sangiin":
+            # 参院は当面 Excel の優先資料のみ。PDF/未対応は raw_only。
+            pass
         elif code in PDF_PARTY_STATUS_CODES and "pages" in doc:
             pdf_path = args.input.parent / "raw" / doc["source_file"]
             if pdf_path.exists():

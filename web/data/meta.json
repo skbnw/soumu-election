@@ -1,5 +1,25 @@
 {
-  "generated_at": "2026-08-08T10:40:05.614736+00:00",
-  "election_kaiji": [44, 45, 46, 47, 48, 49, 50, 51],
-  "facts": 112411
+  "generated_at": "2026-08-08T12:24:25.009140+00:00",
+  "election_kaiji": [
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51
+  ],
+  "election_ids": [
+    "shugiin-44",
+    "shugiin-45",
+    "shugiin-46",
+    "shugiin-47",
+    "shugiin-48",
+    "shugiin-49",
+    "shugiin-50",
+    "shugiin-51",
+    "sangiin-27"
+  ],
+  "facts": 117439
 }
