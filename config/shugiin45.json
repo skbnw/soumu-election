@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "election_type": "shugiin",
+  "kaiji": 45,
+  "election_date": "2009-08-30",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin45/index.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin45/shikuchouson.html"
+  ],
+  "observed_formats": ["xls", "pdf"],
+  "notes": [
+    "集計表と市区町村別資料はExcel 97-2003（.xls）が中心",
+    "市区町村別ページは47都道府県サブページへ分割",
+    "党派別得票数の公式表記は（比例）で、後年の（比例代表）と同じ03-05へ分類",
+    "候補者別得票数、比例代表当選人数、最高裁罷免票数はPDFのみ",
+    "年齢別投票状況はPDFポートフォリオで、内部のPDF 3件も抽出保存"
+  ]
+}

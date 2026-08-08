@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "election_type": "shugiin",
+  "kaiji": 44,
+  "election_date": "2005-09-11",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin44/index.html"
+  ],
+  "observed_formats": ["pdf"],
+  "notes": [
+    "公式indexの全25資料がPDFで、Excelリンクはない",
+    "市区町村別ページおよび市区町村別ファイルへの公式リンクはない",
+    "後年と語順が異なる資料名を共通source_codeへ対応付け",
+    "semantic変換は表構造を検証するまでraw_only"
+  ]
+}

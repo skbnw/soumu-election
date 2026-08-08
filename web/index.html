@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="総務省の衆議院議員総選挙結果を、選挙回・地域・指標を横断して検索できるデータベースです。">
+  <title>衆院選データアーカイブ</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="./" aria-label="衆院選データアーカイブ ホーム">
+      <span class="brand-mark" aria-hidden="true">衆</span>
+      <span>衆院選データアーカイブ</span>
+    </a>
+    <a class="github-link" href="https://github.com/skbnw/soumu-election" target="_blank" rel="noreferrer">GitHub ↗</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">THE HOUSE OF REPRESENTATIVES · OPEN DATA</p>
+        <h1>選挙の記録を、<br><em>ひとつの検索窓</em>から。</h1>
+        <p class="lead">総務省が公開した第44〜51回衆議院議員総選挙のデータを、回次をまたいで検索できます。計算はすべてあなたのブラウザ内で行われます。</p>
+      </div>
+      <div class="edition-card" aria-label="収録範囲">
+        <span>収録範囲</span>
+        <strong>44—51</strong>
+        <small>8 elections / 92,628 facts</small>
+      </div>
+    </section>
+
+    <section class="explorer" aria-labelledby="explorer-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-number">01 / EXPLORE</p>
+          <h2 id="explorer-title">データを探す</h2>
+        </div>
+        <div id="status" class="status" role="status"><span class="pulse"></span>データベースを準備中</div>
+      </div>
+
+      <form id="filters" class="filters">
+        <label>選挙回
+          <select id="election" disabled><option value="">すべて</option></select>
+        </label>
+        <label>都道府県
+          <select id="prefecture" disabled><option value="">すべて</option></select>
+        </label>
+        <label>指標
+          <select id="metric" disabled>
+            <option value="candidate_votes">候補者得票</option>
+            <option value="party_votes">政党得票</option>
+            <option value="turnout_rate">投票率</option>
+            <option value="eligible_voters">有権者数</option>
+            <option value="voters">投票者数</option>
+            <option value="elected_candidates">当選人数</option>
+            <option value="dismissal_yes">国民審査・罷免可</option>
+            <option value="dismissal_no">国民審査・罷免不可</option>
+          </select>
+        </label>
+        <label class="search-label">候補者・政党・裁判官
+          <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="keyword" type="search" placeholder="例：道下大樹" disabled></div>
+        </label>
+        <button id="search" type="submit" disabled>検索する</button>
+      </form>
+
+      <div class="summary-grid" aria-live="polite">
+        <article><span>該当レコード</span><strong id="match-count">—</strong></article>
+        <article><span>値の合計</span><strong id="value-total">—</strong></article>
+        <article><span>表示件数</span><strong id="shown-count">—</strong></article>
+      </div>
+
+      <div class="table-bar">
+        <p id="result-label">検索条件を選択してください</p>
+        <button id="download" class="text-button" type="button" disabled>CSVを保存 ↓</button>
+      </div>
+      <div class="table-shell">
+        <table>
+          <thead><tr><th>回</th><th>都道府県</th><th>区</th><th>候補者・政党・裁判官</th><th>性別</th><th class="numeric">値</th><th>単位</th><th>出典</th></tr></thead>
+          <tbody id="results"><tr><td colspan="8" class="empty">データを読み込んでいます…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="about">
+      <div><p class="section-number">02 / ABOUT</p><h2>数字の向こうに、<br>出典がある。</h2></div>
+      <div class="about-copy">
+        <p>各レコードには総務省資料のファイル名、シート、セル位置につながる情報を保持しています。候補者名は検索しやすい表記と原資料表記を併記し、原資料を上書きしません。</p>
+        <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ずリンク先の総務省資料も確認してください。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer><span>DATA FROM MINISTRY OF INTERNAL AFFAIRS AND COMMUNICATIONS</span><span>Built with DuckDB-Wasm</span></footer>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "election_type": "shugiin",
+  "kaiji": 46,
+  "election_date": "2012-12-16",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin46/index.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin46/shikuchouson.html"
+  ],
+  "observed_formats": ["xls", "pdf"],
+  "notes": [
+    "集計表と市区町村別資料はExcel 97-2003（.xls）が中心",
+    "市区町村別ページは47都道府県サブページへ分割",
+    "候補者別得票数、比例代表当選人数、最高裁罷免票数はPDFのみ",
+    "公式リンク表示の（別ウィンドウ）注記を資料名から除去して分類",
+    "全体版はリンク表記158頁に対しPDF実体160頁"
+  ]
+}

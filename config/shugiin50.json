@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "election_type": "shugiin",
+  "kaiji": 50,
+  "election_date": "2024-10-27",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin50/index.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin50/shikuchouson.html"
+  ],
+  "observed_formats": ["xls", "xlsx", "pdf"],
+  "notes": [
+    "集計表22件はExcel 97-2003（.xls）",
+    "市区町村別58件は.xlsx",
+    "管理執行上問題となった事項PDFが公開済み"
+  ]
+}

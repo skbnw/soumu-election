@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "election_type": "shugiin",
+  "kaiji": 48,
+  "election_date": "2017-10-22",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin48/index.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/shugiin48/shikuchouson.html"
+  ],
+  "observed_formats": ["xls", "xlsx", "pdf"],
+  "notes": [
+    "主要集計と市区町村別の大半はExcel 97-2003（.xls）",
+    "市区町村別ページは47都道府県サブページへ分割",
+    "18歳・19歳投票状況と年齢別投票状況を追加資料として収録",
+    "全体版PDF（136頁）をraw層に保存し、semantic変換はExcelを優先"
+  ]
+}

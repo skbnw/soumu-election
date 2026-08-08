@@ -1,0 +1,26 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Regenerable election data
+data/shugiin*/raw_json/
+data/shugiin*/normalized/
+data/shugiin*/smd_votes.json
+data/shugiin*/pr_votes.json
+data/warehouse/*.duckdb
+!data/warehouse/parquet/
+!data/warehouse/parquet/*.parquet
+!data/warehouse/manifest.json
+
+# Temporary downloads and logs
+*.tmp
+*.part
+*.log
