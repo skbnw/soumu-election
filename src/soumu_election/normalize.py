@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Create analysis-ready election facts from the lossless raw JSON layer."""
+"""Create analysis-ready election facts from the lossless raw JSON layer.
+
+v1.1.0:
+- 03-13 PDF: ヘッダ駆動パーサ（性別列あり/なし・右パネル位置・党派表記差）+ ページ内zigzag読取
+- 03-13 XLS: 第48回 Excel（注記行でページ分割し左→右zigzag、括弧書き漢字の次行参照）
+"""
 
 from __future__ import annotations
 
@@ -1035,13 +1040,118 @@ def candidate_name(value: Any) -> tuple[str, str]:
     return (lines[-1] if lines else ""), raw
 
 
-def parse_pdf_smd_candidates(doc: dict[str, Any], pdf_path: Path) -> list[dict[str, Any]]:
-    output, prefecture, district_number = [], None, None
+def smd_candidate_panel_starts(header: list[Any]) -> list[int]:
+    return [index for index, value in enumerate(header) if compact(value) == "当落"]
+
+
+def smd_candidate_offsets(header: list[Any], start: int) -> dict[str, int | None]:
+    """Map logical fields to offsets from a 当落 column using the panel header."""
+    end = next((index for index in smd_candidate_panel_starts(header) if index > start), len(header))
+    labels = {compact(header[index]): index - start for index in range(start, end)}
+    has_gender = "性別" in labels
+    return {
+        "name": labels.get("候補者氏名", 1),
+        "gender": labels.get("性別"),
+        "age": labels.get("年齢", 2 if not has_gender else 3),
+        "party": next((labels[key] for key in ("届出政党等", "党派") if key in labels), 3 if not has_gender else 4),
+        "status": next((labels[key] for key in ("新前元別", "新前") if key in labels), 4 if not has_gender else 5),
+        "occupation": labels.get("職業", 5 if not has_gender else 6),
+        "votes": labels.get("得票数", 6 if not has_gender else 7),
+        "dual": labels.get("重複", 7 if not has_gender else 8),
+        "sekihairitsu": next((labels[key] for key in ("惜敗率(%)", "惜敗率") if key in labels), 8 if not has_gender else 9),
+    }
+
+
+def parse_smd_candidate_panels(
+    rows: Iterable[tuple[int, list[Any]]],
+    *,
+    header: list[Any],
+    make_fact,
+    state: dict[int, dict[str, Any]] | None = None,
+    name_lookup: Any | None = None,
+) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
+    """Shared SMD candidate table parser for PDF and Excel panels."""
+    output: list[dict[str, Any]] = []
     status_map = {"新": "new", "前": "incumbent", "元": "former"}
+    starts = smd_candidate_panel_starts(header) or [0]
+    offsets_by_start = {start: smd_candidate_offsets(header, start) for start in starts}
+    if state is None:
+        state = {start: {"prefecture": None, "district_number": None} for start in starts}
+    else:
+        for start in starts:
+            state.setdefault(start, {"prefecture": None, "district_number": None})
+
+    for row_index, row in rows:
+        for start in starts:
+            offsets = offsets_by_start[start]
+            label = compact(row[start] if start < len(row) else None)
+            district = re.fullmatch(r"(.+?[都道府県])第(\d+)区", label)
+            if district:
+                state[start]["prefecture"] = district.group(1)
+                state[start]["district_number"] = int(district.group(2))
+                continue
+            if label not in {"当", "落"} or state[start]["prefecture"] is None:
+                continue
+
+            def cell(offset: int | None) -> Any:
+                if offset is None:
+                    return None
+                index = start + offset
+                return row[index] if index < len(row) else None
+
+            name_offset = offsets["name"]
+            if name_lookup is not None and name_offset is not None:
+                name, raw_name = name_lookup(row_index, start, name_offset, cell(name_offset))
+            else:
+                name, raw_name = candidate_name(cell(name_offset))
+            votes = number(cell(offsets["votes"]))
+            if not name or votes is None:
+                continue
+            gender_value = compact(cell(offsets["gender"])) if offsets["gender"] is not None else ""
+            fact = make_fact(row_index=row_index, start=start)
+            fact.update({
+                "contest": "smd",
+                "prefecture": state[start]["prefecture"],
+                "district_number": state[start]["district_number"],
+                "candidate": name,
+                "candidate_raw": raw_name,
+                "gender": gender_value or None,
+                "age": number(cell(offsets["age"])),
+                "party": compact(cell(offsets["party"])),
+                "candidate_status": status_map.get(compact(cell(offsets["status"]))),
+                "occupation": compact(cell(offsets["occupation"])),
+                "elected": label == "当",
+                "dual_candidacy": compact(cell(offsets["dual"])) == "重",
+                "sekihairitsu": number(cell(offsets["sekihairitsu"])),
+                "metric": "candidate_votes",
+                "value": votes,
+                "unit": "votes",
+            })
+            output.append(fact)
+    return output, state
+
+
+def parse_pdf_smd_candidates(doc: dict[str, Any], pdf_path: Path) -> list[dict[str, Any]]:
+    """Parse 03-13 SMD candidate vote PDFs for both gender and no-gender layouts.
+
+    Uses a single reading-order state across panels/pages (same approach as the
+    original validator-passing importer), with header-driven column offsets.
+    """
+    output: list[dict[str, Any]] = []
+    status_map = {"新": "new", "前": "incumbent", "元": "former"}
+    prefecture = None
+    district_number = None
     with pdfplumber.open(pdf_path) as pdf:
         for page_index, page in enumerate(pdf.pages, 1):
-            table = page.extract_tables()[0]
-            for start in (0, 10):
+            tables = page.extract_tables()
+            if not tables or not tables[0]:
+                continue
+            table = tables[0]
+            header = table[0]
+            starts = smd_candidate_panel_starts(header) or [0]
+            offsets_by_start = {start: smd_candidate_offsets(header, start) for start in starts}
+            for start in starts:
+                offsets = offsets_by_start[start]
                 for row_index, row in enumerate(table[1:], 2):
                     label = compact(row[start] if start < len(row) else None)
                     district = re.fullmatch(r"(.+?[都道府県])第(\d+)区", label)
@@ -1050,21 +1160,148 @@ def parse_pdf_smd_candidates(doc: dict[str, Any], pdf_path: Path) -> list[dict[s
                         continue
                     if label not in {"当", "落"} or prefecture is None:
                         continue
-                    name, raw_name = candidate_name(row[start + 1])
-                    votes = number(row[start + 7])
+
+                    def cell(offset: int | None, _row=row, _start=start) -> Any:
+                        if offset is None:
+                            return None
+                        index = _start + offset
+                        return _row[index] if index < len(_row) else None
+
+                    name, raw_name = candidate_name(cell(offsets["name"]))
+                    votes = number(cell(offsets["votes"]))
                     if not name or votes is None:
                         continue
+                    gender_value = compact(cell(offsets["gender"])) if offsets["gender"] is not None else ""
                     fact = pdf_fact_base(doc, page_index, f"table:R{row_index}C{start + 1}")
-                    fact.update({"contest": "smd", "prefecture": prefecture,
-                                 "district_number": district_number, "candidate": name,
-                                 "candidate_raw": raw_name, "gender": compact(row[start + 2]),
-                                 "age": number(row[start + 3]), "party": compact(row[start + 4]),
-                                 "candidate_status": status_map.get(compact(row[start + 5])),
-                                 "occupation": compact(row[start + 6]), "elected": label == "当",
-                                 "dual_candidacy": compact(row[start + 8]) == "重",
-                                 "sekihairitsu": number(row[start + 9]),
-                                 "metric": "candidate_votes", "value": votes, "unit": "votes"})
+                    fact.update({
+                        "contest": "smd",
+                        "prefecture": prefecture,
+                        "district_number": district_number,
+                        "candidate": name,
+                        "candidate_raw": raw_name,
+                        "gender": gender_value or None,
+                        "age": number(cell(offsets["age"])),
+                        "party": compact(cell(offsets["party"])),
+                        "candidate_status": status_map.get(compact(cell(offsets["status"]))),
+                        "occupation": compact(cell(offsets["occupation"])),
+                        "elected": label == "当",
+                        "dual_candidacy": compact(cell(offsets["dual"])) == "重",
+                        "sekihairitsu": number(cell(offsets["sekihairitsu"])),
+                        "metric": "candidate_votes",
+                        "value": votes,
+                        "unit": "votes",
+                    })
                     output.append(fact)
+    return output
+
+
+def parse_xls_smd_candidates(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
+    """Parse 03-13 SMD candidate vote Excel workbooks.
+
+    MIC Excel dumps keep the printed two-column page layout. Notes rows mark page
+    boundaries; within each page we read left panel then right panel (zigzag),
+    matching the PDF importer that passes prefecture vote validation.
+    """
+    if not table:
+        return []
+    header_index = next((index for index, row in enumerate(table)
+                         if sum(compact(value) == "当落" for value in row) >= 1), None)
+    if header_index is None:
+        return []
+    header = list(table[header_index])
+    if header_index + 1 < len(table):
+        for column, value in enumerate(table[header_index + 1]):
+            if compact(value) and column < len(header):
+                header[column] = f"{header[column] or ''}{value or ''}"
+
+    starts = smd_candidate_panel_starts(header) or [0]
+    offsets_by_start = {start: smd_candidate_offsets(header, start) for start in starts}
+    status_map = {"新": "new", "前": "incumbent", "元": "former"}
+
+    bounds = [header_index + 2]
+    for row_index, row in enumerate(table[header_index + 2 :], header_index + 2):
+        text = str(row[0] if row else "")
+        if text.startswith("(注)") or text.startswith("（注）"):
+            bounds.append(row_index)
+    bounds.append(len(table))
+
+    segments: list[tuple[int, int]] = []
+    for index in range(len(bounds) - 1):
+        start_row, end_row = bounds[index], bounds[index + 1]
+        text = str(table[start_row][0] if start_row < len(table) and table[start_row] else "")
+        if text.startswith("(注)") or text.startswith("（注）"):
+            cursor = start_row
+            while cursor < end_row:
+                row = table[cursor]
+                cell0 = str(row[0] if row else "")
+                if cell0.startswith("(注)") or cell0.startswith("（注）") or cell0.startswith(" "):
+                    cursor += 1
+                    continue
+                if not any(compact(value) for value in row[:12]):
+                    cursor += 1
+                    continue
+                break
+            start_row = cursor
+        if start_row < end_row:
+            segments.append((start_row, end_row))
+
+    output: list[dict[str, Any]] = []
+    prefecture = None
+    district_number = None
+    for seg_start, seg_end in segments:
+        for start in starts:
+            offsets = offsets_by_start[start]
+            for row_index in range(seg_start, seg_end):
+                row = table[row_index]
+                label = compact(row[start] if start < len(row) else None)
+                district = re.fullmatch(r"(.+?[都道府県])第(\d+)区", label)
+                if district:
+                    prefecture, district_number = district.group(1), int(district.group(2))
+                    continue
+                if label not in {"当", "落"} or prefecture is None:
+                    continue
+
+                def cell(offset: int | None, _row=row, _start=start) -> Any:
+                    if offset is None:
+                        return None
+                    index = _start + offset
+                    return _row[index] if index < len(_row) else None
+
+                chunks = [str(cell(offsets["name"]) or "")]
+                name_col = start + (offsets["name"] or 0)
+                for look in (1, 2):
+                    peek_idx = row_index + look
+                    if peek_idx >= len(table) or name_col >= len(table[peek_idx]):
+                        break
+                    text = str(table[peek_idx][name_col] or "")
+                    if "(" in text or "（" in text:
+                        chunks.append(text)
+                        break
+                name, raw_name = candidate_name("\n".join(chunks))
+                votes = number(cell(offsets["votes"]))
+                if not name or votes is None:
+                    continue
+                gender_value = compact(cell(offsets["gender"])) if offsets["gender"] is not None else ""
+                fact = base(doc, sheet, row_index + 1, start)
+                fact.update({
+                    "contest": "smd",
+                    "prefecture": prefecture,
+                    "district_number": district_number,
+                    "candidate": name,
+                    "candidate_raw": raw_name,
+                    "gender": gender_value or None,
+                    "age": number(cell(offsets["age"])),
+                    "party": compact(cell(offsets["party"])),
+                    "candidate_status": status_map.get(compact(cell(offsets["status"]))),
+                    "occupation": compact(cell(offsets["occupation"])),
+                    "elected": label == "当",
+                    "dual_candidacy": compact(cell(offsets["dual"])) == "重",
+                    "sekihairitsu": number(cell(offsets["sekihairitsu"])),
+                    "metric": "candidate_votes",
+                    "value": votes,
+                    "unit": "votes",
+                })
+                output.append(fact)
     return output
 
 
@@ -1092,6 +1329,7 @@ PARSERS = {
     "03-09": parse_ballots,
     "03-10": parse_pr_block_ranking,
     "03-12": parse_seat_allocation,
+    "03-13": parse_xls_smd_candidates,
     "05-01": parse_people,
     "05-01-02": parse_rates,
     "05-02": parse_judicial_votes_v2,

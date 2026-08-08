@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-08-08T03:19:42.499625+00:00",
+  "generated_at": "2026-08-08T08:46:39.779256+00:00",
   "election_kaiji": [
     44,
     45,
@@ -14,9 +14,9 @@
   "database": "soumu_election.duckdb",
   "counts": {
     "elections": 8,
-    "source_documents": 176,
-    "normalization_coverage": 802,
-    "facts": 92628,
+    "source_documents": 183,
+    "normalization_coverage": 183,
+    "facts": 100045,
     "validation_results": 8
   },
   "validation": {
@@ -25,7 +25,7 @@
     "judicial_review_arithmetic": "pass",
     "ballot_arithmetic": "pass",
     "people_arithmetic": "pass",
-    "candidate_votes_to_valid_ballots": "pass",
+    "candidate_votes_to_valid_ballots": "fail",
     "pr_vote_source_agreement": "pass",
     "pr_seat_allocation": "pass"
   }

@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="総務省の衆議院議員総選挙結果を、選挙回・地域・指標を横断して検索できるデータベースです。">
+  <meta name="description" content="総務省の衆議院議員総選挙結果を、小選挙区・比例代表・投票有権者・国民審査ごとに検索できるデータベースです。">
   <title>衆院選データアーカイブ</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <link rel="stylesheet" href="./styles.css">
-  <script src="./coi-serviceworker.js"></script>
 </head>
 <body>
   <header class="masthead">
@@ -22,7 +21,7 @@
     <section class="hero">
       <p class="eyebrow">SHUGIIN ELECTION DATA / 44—51</p>
       <h1>衆院選データを<br>横断検索する。</h1>
-      <p class="lead">総務省公表資料から整備した第44〜51回衆議院議員総選挙、92,628件のデータ。選挙回・地域・指標・氏名で検索できます。</p>
+      <p class="lead">総務省公表資料から整備した第44〜51回衆議院議員総選挙、92,628件のデータ。小選挙区・比例代表・投票有権者・国民審査の入口から検索できます。</p>
     </section>
 
     <section class="explorer" aria-labelledby="explorer-title">
@@ -34,27 +33,55 @@
         <div id="status" class="status" role="status"><span class="pulse"></span>データベースを準備中</div>
       </div>
 
-      <form id="filters" class="filters">
+      <div class="tabs" role="tablist" aria-label="検索の種類">
+        <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="smd">小選挙区</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="pr">比例代表</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="turnout">投票・有権者</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="judicial">国民審査</button>
+      </div>
+      <p id="tab-note" class="tab-note"></p>
+
+      <form id="filters" class="filters" data-tab="smd">
         <label>選挙回
           <select id="election" disabled><option value="">すべて</option></select>
         </label>
-        <label>都道府県
-          <select id="prefecture" disabled><option value="">すべて</option></select>
-        </label>
-        <label>指標
-          <select id="metric" disabled>
-            <option value="candidate_votes">候補者得票</option>
-            <option value="party_votes">政党得票</option>
-            <option value="turnout_rate">投票率</option>
-            <option value="eligible_voters">有権者数</option>
-            <option value="voters">投票者数</option>
-            <option value="elected_candidates">当選人数</option>
-            <option value="dismissal_yes">国民審査・罷免可</option>
-            <option value="dismissal_no">国民審査・罷免不可</option>
+        <label data-show="pr">集計単位
+          <select id="geo-level" disabled>
+            <option value="prefecture">都道府県</option>
+            <option value="block">ブロック</option>
+            <option value="national">全国</option>
           </select>
         </label>
-        <label class="search-label">候補者・政党・裁判官
-          <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="keyword" type="search" placeholder="例：道下大樹" disabled></div>
+        <label data-show="pr" id="pr-block-label">比例ブロック
+          <select id="pr-block" disabled><option value="">すべて</option></select>
+        </label>
+        <label data-show="turnout">選挙区分
+          <select id="contest" disabled>
+            <option value="">すべて</option>
+            <option value="smd">小選挙区</option>
+            <option value="pr">比例代表</option>
+            <option value="judicial_review">国民審査</option>
+          </select>
+        </label>
+        <label data-show="turnout">集計範囲
+          <select id="scope" disabled>
+            <option value="all">全体</option>
+            <option value="overseas">在外</option>
+            <option value="">すべて</option>
+          </select>
+        </label>
+        <label data-show="smd pr turnout judicial" id="prefecture-label">都道府県
+          <select id="prefecture" disabled><option value="">すべて</option></select>
+        </label>
+        <label data-show="smd">選挙区
+          <select id="district" disabled><option value="">すべて</option></select>
+        </label>
+        <label data-show="turnout judicial">指標
+          <select id="metric" disabled></select>
+        </label>
+        <label class="search-label" data-show="smd pr judicial">
+          <span id="keyword-label">候補者名</span>
+          <div class="search-wrap"><input id="keyword" type="search" placeholder="例：道下大樹" disabled></div>
         </label>
         <button id="search" type="submit" disabled>検索する</button>
       </form>
@@ -71,7 +98,7 @@
       </div>
       <div class="table-shell">
         <table>
-          <thead><tr><th>回</th><th>都道府県</th><th>区</th><th>候補者・政党・裁判官</th><th>性別</th><th class="numeric">値</th><th>単位</th><th>出典</th></tr></thead>
+          <thead><tr id="result-head"></tr></thead>
           <tbody id="results"><tr><td colspan="8" class="empty">データを読み込んでいます…</td></tr></tbody>
         </table>
       </div>
@@ -81,6 +108,7 @@
       <div><p class="section-number">ABOUT</p><h2>データについて</h2></div>
       <div class="about-copy">
         <p>各レコードには総務省資料のファイル名、シート、セル位置につながる情報を保持しています。候補者名は検索しやすい表記と原資料表記を併記し、原資料を上書きしません。</p>
+        <p>検索は用途別に分かれています。小選挙区の候補者得票は現時点で第44回のみ収録、比例代表は都道府県・ブロック・全国で絞り込めます。市区町村別得票は別レイヤにあり未収録です。</p>
         <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ずリンク先の総務省資料も確認してください。</p>
       </div>
     </section>
