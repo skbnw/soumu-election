@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Create analysis-ready election facts from the lossless raw JSON layer.
 
+v1.2.1:
+- 03-07: 党派ヘッダが複数段ある表で、後半党派を誤って前半党派に割り当てないよう修正
+v1.2.0:
+- 03-11: Excel（第48回）党派別当選人数 + 既存PDFパーサを全回で再適用
+- 03-15: 18歳・19歳投票状況（第48回 Excel）
+- 03-16: 年齢別投票状況（第45回添付PDF / 第46〜47回PDF本文 / 第48回 Excel）
 v1.1.0:
 - 03-13 PDF: ヘッダ駆動パーサ（性別列あり/なし・右パネル位置・党派表記差）+ ページ内zigzag読取
 - 03-13 XLS: 第48回 Excel（注記行でページ分割し左→右zigzag、括弧書き漢字の次行参照）
@@ -452,17 +458,18 @@ def parse_prefecture_party_gender(doc: dict[str, Any], sheet: dict[str, Any], ta
 
 
 def parse_pr_prefecture_party(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
-    header_index = next((i for i, row in enumerate(table)
-                         if len(row) > 2 and compact(row[1]) in {"都道府県", "区分"} and compact(row[2])), None)
-    if header_index is None:
-        return []
-    parties = [(c, compact(v)) for c, v in enumerate(table[header_index][2:], start=2) if compact(v)]
-    output, current_block = [], None
-    for row_index in range(header_index + 1, len(table)):
-        row = table[row_index]
-        if compact(row[0]):
+    """Normalize 03-07. Party headers may repeat when the sheet continues with more parties."""
+    output, current_block, parties = [], None, []
+    for row_index, row in enumerate(table):
+        header_label = compact(row[1] if len(row) > 1 else None)
+        if header_label in {"都道府県", "区分"} and any(compact(v) for v in row[2:]):
+            parties = [(c, compact(v)) for c, v in enumerate(row[2:], start=2) if compact(v)]
+            continue
+        if not parties:
+            continue
+        if compact(row[0] if row else None):
             current_block = compact(row[0])
-        prefecture = compact(row[1])
+        prefecture = compact(row[1] if len(row) > 1 else None)
         if not (PREFECTURE.search(prefecture) or prefecture in {"計", "合計", "全国"}):
             continue
         for column, party in parties:
@@ -1305,6 +1312,262 @@ def parse_xls_smd_candidates(doc: dict[str, Any], sheet: dict[str, Any], table: 
     return output
 
 
+def _lines(value: Any) -> list[str]:
+    return [line.strip() for line in str(value or "").splitlines() if str(line).strip()]
+
+
+def parse_xls_pr_elected(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
+    """Normalize 03-11 Excel panels (party votes / elected counts / list ranks)."""
+    output: list[dict[str, Any]] = []
+    header_rows = [
+        index for index, row in enumerate(table)
+        if any(compact(value) in {"政党等名", "党派名"} for value in row)
+    ]
+    block_at: dict[int, str] = {}
+    current_block = ""
+    for row_index, row in enumerate(table):
+        label0 = compact(row[0] if row else None)
+        if "選挙区" in label0:
+            current_block = compact(label0.replace("選挙区", ""))
+        block_at[row_index] = current_block
+
+    for header_pos, row_index in enumerate(header_rows):
+        row = table[row_index]
+        block = block_at.get(row_index, "")
+        end = header_rows[header_pos + 1] if header_pos + 1 < len(header_rows) else len(table)
+        starts = [index for index, value in enumerate(row) if compact(value) in {"政党等名", "党派名"}]
+        for start in starts:
+            party = compact(row[start + 2] if start + 2 < len(row) else None)
+            if not party:
+                continue
+            votes = clean_count(table[row_index + 2][start + 2] if row_index + 2 < len(table) else None)
+            elected_total = clean_count(table[row_index + 3][start + 2] if row_index + 3 < len(table) else None)
+            gender_row = table[row_index + 4] if row_index + 4 < len(table) else []
+            counts = {
+                "total": elected_total,
+                "male": clean_count(gender_row[start + 1] if start + 1 < len(gender_row) else None),
+                "female": clean_count(gender_row[start + 4] if start + 4 < len(gender_row) else None),
+            }
+            if votes is not None:
+                fact = base(doc, sheet, row_index + 2, start + 2)
+                fact.update({"contest": "pr", "pr_block": block, "party": party,
+                             "metric": "party_votes", "value": votes, "unit": "votes"})
+                output.append(fact)
+            if (
+                all(value is not None for value in counts.values())
+                and counts["male"] + counts["female"] == counts["total"]
+            ):
+                for gender, value in counts.items():
+                    col = start + 2 if gender == "total" else start + 1 if gender == "male" else start + 4
+                    fact = base(doc, sheet, row_index + (4 if gender != "total" else 3), col)
+                    fact.update({"contest": "pr", "pr_block": block, "party": party,
+                                 "gender": gender, "metric": "elected_candidates",
+                                 "value": value, "unit": "people"})
+                    output.append(fact)
+            for list_index in range(row_index + 6, end):
+                list_row = table[list_index]
+                label0 = compact(list_row[0] if list_row else None)
+                if "選挙区" in label0:
+                    break
+                position = number(list_row[start] if start < len(list_row) else None)
+                name_raw = str(list_row[start + 1] if start + 1 < len(list_row) else "" or "")
+                name = compact(name_raw)
+                if position is None or not name:
+                    continue
+                fact = base(doc, sheet, list_index, start + 1)
+                fact.update({"contest": "pr", "pr_block": block, "party": party,
+                             "candidate": name, "candidate_raw": name_raw.strip(),
+                             "metric": "pr_list_position", "value": position, "unit": "rank"})
+                output.append(fact)
+    return output
+
+
+def parse_age_turnout_1819(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
+    """Normalize 03-15 prefecture × 18/19 voting workbook."""
+    output: list[dict[str, Any]] = []
+    for row_index, row in enumerate(table):
+        prefecture = compact(row[1] if len(row) > 1 else None)
+        if not prefecture or prefecture in {"都道府県", "都道"}:
+            continue
+        if not (PREFECTURE.search(prefecture) or prefecture in {"全国", "計", "合計"}):
+            continue
+        # columns: 3-5 eligible 18/19/total, 6-8 voters, 9-11 turnout, 12 overall turnout
+        specs = [
+            (3, "18", "eligible_voters", "people"),
+            (4, "19", "eligible_voters", "people"),
+            (5, "18-19", "eligible_voters", "people"),
+            (6, "18", "voters", "people"),
+            (7, "19", "voters", "people"),
+            (8, "18-19", "voters", "people"),
+            (9, "18", "turnout_rate", "percent"),
+            (10, "19", "turnout_rate", "percent"),
+            (11, "18-19", "turnout_rate", "percent"),
+            (12, "all", "turnout_rate", "percent"),
+        ]
+        for column, age_band, metric, unit in specs:
+            value = number(row[column] if column < len(row) else None)
+            if value is None:
+                continue
+            fact = base(doc, sheet, row_index, column)
+            fact.update({
+                "contest": "all",
+                "prefecture": prefecture,
+                "age_band": age_band,
+                "gender": "total" if age_band != "all" else "total",
+                "metric": metric,
+                "value": value,
+                "unit": unit,
+                "row_variant": "age_18_19" if age_band != "all" else "overall_reference",
+            })
+            output.append(fact)
+    return output
+
+
+def parse_age_turnout_by_age(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
+    """Normalize 03-16 Excel: national sample by single-year age and gender."""
+    output: list[dict[str, Any]] = []
+    for row_index, row in enumerate(table):
+        age_label = compact(row[0] if row else None)
+        if not age_label or age_label in {"年齢", "年齢（歳）"}:
+            continue
+        if age_label == "小計":
+            age_band = "subtotal"
+        elif age_label in {"計", "合計"}:
+            age_band = "total"
+        else:
+            age_band = age_label.replace("歳以上", "+").replace("歳", "")
+        genders = ("male", "female", "total")
+        for metric, offset, unit in (
+            ("eligible_voters", 1, "people"),
+            ("voters", 4, "people"),
+            ("turnout_rate", 7, "percent"),
+        ):
+            for gender_index, gender in enumerate(genders):
+                column = offset + gender_index
+                value = number(row[column] if column < len(row) else None)
+                if value is None:
+                    continue
+                fact = base(doc, sheet, row_index, column)
+                fact.update({
+                    "contest": "all",
+                    "prefecture": "全国",
+                    "age_band": age_band,
+                    "gender": gender,
+                    "metric": metric,
+                    "value": value,
+                    "unit": unit,
+                    "row_variant": "age_sample",
+                })
+                output.append(fact)
+    return output
+
+
+def parse_pdf_age_turnout_table(
+    doc: dict[str, Any],
+    page_index: int,
+    table: list[list[Any]],
+    source_file: str,
+) -> list[dict[str, Any]]:
+    """Parse 付表１/付表２ style age turnout tables (often one multiline data row)."""
+    if not table or len(table) < 3:
+        return []
+    # locate gender header
+    header_index = next(
+        (index for index, row in enumerate(table[:5]) if sum(1 for v in row if compact(v) == "男") >= 2),
+        1,
+    )
+    data_rows = table[header_index + 1 :]
+    output: list[dict[str, Any]] = []
+
+    def emit(age_label: str, values: list[Any], cell_tag: str) -> None:
+        label = compact(age_label)
+        if not label:
+            return
+        if label in {"計", "合計"}:
+            age_band, variant = "total", "sample_total"
+        elif "全国" in label:
+            age_band, variant = "total", "national_total"
+        else:
+            age_band = label.replace("歳以上", "+").replace("歳", "").replace("～", "-").replace("~", "-")
+            variant = "age_band_sample" if "-" in age_band or "～" in label else "age_sample"
+        # expected: 9 or 12 numeric columns after age (elig m/f/t, voters m/f/t, rate m/f/t[, prev...])
+        nums = [number(v) for v in values]
+        specs = [
+            (0, "eligible_voters", "people", "male"),
+            (1, "eligible_voters", "people", "female"),
+            (2, "eligible_voters", "people", "total"),
+            (3, "voters", "people", "male"),
+            (4, "voters", "people", "female"),
+            (5, "voters", "people", "total"),
+            (6, "turnout_rate", "percent", "male"),
+            (7, "turnout_rate", "percent", "female"),
+            (8, "turnout_rate", "percent", "total"),
+        ]
+        for offset, metric, unit, gender in specs:
+            if offset >= len(nums) or nums[offset] is None:
+                continue
+            fact = {
+                "election_kaiji": doc["election_kaiji"],
+                "source_code": doc["source_code"],
+                "dataset": doc.get("dataset"),
+                "source_url": doc.get("source_url"),
+                "source_file": source_file,
+                "source_sheet": f"page {page_index}",
+                "source_cell": cell_tag,
+                "contest": "all",
+                "prefecture": "全国",
+                "age_band": age_band,
+                "gender": gender,
+                "metric": metric,
+                "value": nums[offset],
+                "unit": unit,
+                "row_variant": variant,
+            }
+            output.append(fact)
+
+    for row_index, row in enumerate(data_rows):
+        age_cell = row[0] if row else None
+        ages = _lines(age_cell)
+        if len(ages) <= 1:
+            # ordinary single-age row
+            emit(str(age_cell or ""), row[1:10], f"table:R{header_index + 1 + row_index}")
+            continue
+        # multiline packed row
+        col_lines = [_lines(row[col]) if col < len(row) else [] for col in range(1, 10)]
+        for age_index, age_label in enumerate(ages):
+            values = [col[age_index] if age_index < len(col) else None for col in col_lines]
+            emit(age_label, values, f"table:multiline:{age_index + 1}")
+    return output
+
+
+def parse_pdf_age_turnout(doc: dict[str, Any], pdf_path: Path) -> list[dict[str, Any]]:
+    """Normalize 03-16 PDF body and/or extracted portfolio attachments."""
+    output: list[dict[str, Any]] = []
+    candidates: list[Path] = [pdf_path]
+    attachments_dir = pdf_path.parent / f"{pdf_path.stem}_attachments"
+    if attachments_dir.exists():
+        candidates.extend(sorted(attachments_dir.glob("*.pdf")))
+    for path in candidates:
+        name = path.name
+        # skip overview-only cover pages without 付表
+        with pdfplumber.open(path) as pdf:
+            for page_index, page in enumerate(pdf.pages, 1):
+                text = page.extract_text() or ""
+                if "年齢別投票者数" not in text and "年齢階層別" not in text:
+                    continue
+                # Prefer national tables; skip municipality detail pages of 付表２
+                if "市区町村" in text and "１．全国" not in text and "1．全国" not in text and "１.全国" not in text:
+                    # page may still start with national; allow if 全国 section marker exists earlier
+                    if not re.search(r"[１1][\.．]\s*全国", text):
+                        continue
+                tables = page.extract_tables() or []
+                if not tables:
+                    continue
+                output.extend(parse_pdf_age_turnout_table(doc, page_index, tables[0], name))
+                # 付表２ may have national table as first table only
+    return output
+
+
 def parse_pdf_remaining(doc: dict[str, Any], pdf_path: Path) -> list[dict[str, Any]]:
     return {"03-10": parse_pdf_pr_ranking, "03-11": parse_pdf_pr_elected,
             "03-12": parse_pdf_seat_allocation, "03-13": parse_pdf_smd_candidates}[doc["source_code"]](doc, pdf_path)
@@ -1328,8 +1591,11 @@ PARSERS = {
     "03-08": parse_ballots,
     "03-09": parse_ballots,
     "03-10": parse_pr_block_ranking,
+    "03-11": parse_xls_pr_elected,
     "03-12": parse_seat_allocation,
     "03-13": parse_xls_smd_candidates,
+    "03-15": parse_age_turnout_1819,
+    "03-16": parse_age_turnout_by_age,
     "05-01": parse_people,
     "05-01-02": parse_rates,
     "05-02": parse_judicial_votes_v2,
@@ -1370,6 +1636,10 @@ def main() -> int:
             pdf_path = args.input.parent / "raw" / doc["source_file"]
             if pdf_path.exists():
                 facts.extend(parse_pdf_remaining(doc, pdf_path))
+        elif code == "03-16" and "pages" in doc:
+            pdf_path = args.input.parent / "raw" / doc["source_file"]
+            if pdf_path.exists():
+                facts.extend(parse_pdf_age_turnout(doc, pdf_path))
         elif code in PDF_SUMMARY_CODES and "pages" in doc:
             pdf_path = args.input.parent / "raw" / doc["source_file"]
             if pdf_path.exists():

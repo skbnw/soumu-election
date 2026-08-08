@@ -1,9 +1,10 @@
 /*
- * 衆院選データアーカイブ — DuckDB-Wasm 検索
- * v2.4.2
+ * 衆院選データ横断検索β — DuckDB-Wasm 検索
+ * v2.4.4
+ * - 「検索」見出し削除、比例全国は03-05今回得票、票表示は四捨五入
+ * - ヒーロー見出しを削り、ヘッダ表記を「衆院選データ横断検索β」に統一
  * - 起動時の市区町村全件インデックス読込をやめ、プルダウンは都度SQL取得（起動ハング対策）
  * - 比例代表: 政党プルダウン（全国得票順）
- * - 見出し「衆院選データ横断検索β」
  */
 
 import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.30.0/+esm';
@@ -36,6 +37,16 @@ const els = {
 
 const escapeSql = (value) => String(value).replaceAll("'", "''");
 const displayNumber = new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 3 });
+const displayVotes = new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 0 });
+
+/** 総務省Excelの得票に小数が残る場合があるため、票は四捨五入して表示する */
+function formatValue(value, unit) {
+  if (value == null || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  if (unit === 'votes' || unit === 'people') return displayVotes.format(Math.round(n));
+  return displayNumber.format(n);
+}
 const html = (value) => String(value ?? '—').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const INIT_TIMEOUT_MS = 60000;
 const RESULT_LIMIT = 500;
@@ -488,30 +499,11 @@ function selectSql() {
 
     if (level === 'national') {
       return `
-        WITH national_direct AS (
-          SELECT election_kaiji, party, max(value) AS value,
-                 any_value(unit) AS unit, '03-07' AS source_code
-          FROM read_parquet('facts.parquet')
-          WHERE metric = 'party_votes' AND contest = 'pr' AND source_code = '03-07'
-            AND pr_block = '全国' ${partyNotTotal} ${electionFilter} ${partyFilter}
-          GROUP BY election_kaiji, party
-        ),
-        national_from_blocks AS (
-          SELECT election_kaiji, party, sum(value) AS value,
-                 any_value(unit) AS unit, '集計' AS source_code
-          FROM read_parquet('facts.parquet')
-          WHERE metric = 'party_votes' AND contest = 'pr' AND source_code = '03-10'
-            ${partyNotTotal}
-            AND election_kaiji NOT IN (SELECT DISTINCT election_kaiji FROM national_direct)
-            ${electionFilter} ${partyFilter}
-          GROUP BY election_kaiji, party
-        )
         SELECT election_kaiji, '全国' AS pr_block, party, value, unit, source_code
-        FROM (
-          SELECT * FROM national_direct
-          UNION ALL
-          SELECT * FROM national_from_blocks
-        )
+        FROM read_parquet('facts.parquet')
+        WHERE metric = 'current_votes' AND contest = 'pr' AND source_code = '03-05'
+          ${partyNotTotal} ${electionFilter} ${partyFilter}
+          AND coalesce(party, '') NOT IN ('合計', '計', '諸派')
         ORDER BY election_kaiji DESC, value DESC NULLS LAST
         LIMIT ${RESULT_LIMIT}`;
     }
@@ -531,7 +523,7 @@ function selectSql() {
     return `
       SELECT election_kaiji, replace(pr_block, '選挙区', '') AS pr_block,
              prefecture, any_value(prefecture_code) AS prefecture_code, party,
-             arg_min(value, CAST(regexp_extract(source_cell, '(\\d+)', 1) AS INTEGER)) AS value,
+             max(value) AS value,
              any_value(unit) AS unit, any_value(source_code) AS source_code
       FROM read_parquet('facts.parquet')
       WHERE metric = 'party_votes' AND contest = 'pr' AND source_code = '03-07'
@@ -541,7 +533,7 @@ function selectSql() {
       GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), prefecture, party
       ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, value DESC NULLS LAST
       LIMIT ${RESULT_LIMIT}`;
-  }
+    }
 
   if (state.tab === 'turnout') {
     return `SELECT election_kaiji, contest, scope, prefecture, prefecture_code,
@@ -605,7 +597,7 @@ function renderRows() {
       <td>${html(districtLabel(row.district_number))}</td>
       <td>${html(row.candidate)}</td>
       <td>${html(genderLabel(row.gender))}</td>
-      <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+      <td class="numeric">${formatValue(row.value, row.unit)}</td>
       <td>${html(row.unit)}</td>
       <td>${html(row.source_code)}</td></tr>`).join('');
     return;
@@ -621,7 +613,7 @@ function renderRows() {
       <td>${html(row.municipality)}</td>
       <td>${html(row.subject)}</td>
       <td>${html(row.party)}</td>
-      <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+      <td class="numeric">${formatValue(row.value, row.unit)}</td>
       <td>${html(row.unit)}</td>
       <td>${html(grainLabel(row.grain))}</td>
       <td>${html(row.source_code)}</td></tr>`).join('');
@@ -636,7 +628,7 @@ function renderRows() {
         return `<tr>
           <td>${html(electionLabel(row.election_kaiji))}</td>
           <td>${html(row.party)}</td>
-          <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+          <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td>${html(row.unit)}</td>
           <td>${html(row.source_code)}</td></tr>`;
       }
@@ -645,7 +637,7 @@ function renderRows() {
           <td>${html(electionLabel(row.election_kaiji))}</td>
           <td>${html(block)}</td>
           <td>${html(row.party)}</td>
-          <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+          <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td>${html(row.unit)}</td>
           <td>${html(row.source_code)}</td></tr>`;
       }
@@ -654,7 +646,7 @@ function renderRows() {
         <td>${html(block)}</td>
         <td>${html(row.prefecture)}</td>
         <td>${html(row.party)}</td>
-        <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+        <td class="numeric">${formatValue(row.value, row.unit)}</td>
         <td>${html(row.unit)}</td>
         <td>${html(row.source_code)}</td></tr>`;
     }).join('');
@@ -669,7 +661,7 @@ function renderRows() {
       <td>${html(row.prefecture)}</td>
       <td>${html(metricLabel(row.metric))}</td>
       <td>${html(genderLabel(row.gender))}</td>
-      <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+      <td class="numeric">${formatValue(row.value, row.unit)}</td>
       <td>${html(row.unit)}</td>
       <td>${html(row.source_code)}</td></tr>`).join('');
     return;
@@ -680,7 +672,7 @@ function renderRows() {
     <td>${html(row.prefecture)}</td>
     <td>${html(row.justice)}</td>
     <td>${html(metricLabel(row.metric))}</td>
-    <td class="numeric">${row.value == null ? '—' : displayNumber.format(row.value)}</td>
+    <td class="numeric">${formatValue(row.value, row.unit)}</td>
     <td>${html(row.unit)}</td>
     <td>${html(row.source_code)}</td></tr>`).join('');
 }
@@ -825,10 +817,10 @@ async function loadCoverage() {
 
   // 選挙回ごとの全国得票順政党リスト（比例ブロック得票の合計）
   const partyRows = await state.conn.query(`
-    SELECT election_kaiji, party, sum(value) AS votes
+    SELECT election_kaiji, party, max(value) AS votes
     FROM read_parquet('facts.parquet')
-    WHERE metric = 'party_votes' AND contest = 'pr' AND source_code = '03-10'
-      AND coalesce(party, '') NOT IN ('', '合計')
+    WHERE metric = 'current_votes' AND contest = 'pr' AND source_code = '03-05'
+      AND coalesce(party, '') NOT IN ('', '合計', '計', '諸派')
     GROUP BY election_kaiji, party
     ORDER BY election_kaiji, votes DESC NULLS LAST, party`);
   state.partiesByElection = {};

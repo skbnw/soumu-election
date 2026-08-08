@@ -2,7 +2,7 @@
 
 ## ブラウザ版
 
-[衆院選データアーカイブ](https://skbnw.github.io/soumu-election/) では、第44〜51回の正規化済みデータを選挙回・都道府県・指標・候補者名等で横断検索できます。DuckDB-Wasmが公開用Parquetをブラウザ内で検索するため、サーバーへ検索条件を送信しません。表示結果はCSVとして保存できます。
+[衆院選データ横断検索β](https://skbnw.github.io/soumu-election/) では、第44〜51回の正規化済みデータを選挙回・都道府県・指標・候補者名等で横断検索できます。DuckDB-Wasmが公開用Parquetをブラウザ内で検索するため、サーバーへ検索条件を送信しません。表示結果はCSVとして保存できます。
 
 サイトは `web/`、公開処理は `.github/workflows/pages.yml` にあります。`data/warehouse/parquet/` を更新してmainブランチへ反映すると、GitHub Pagesも自動更新されます。
 
@@ -82,9 +82,13 @@ data/
 
 `normalized/manifest.json` の `coverage` には、資料ごとに `normalized` または `raw_only` と件数を記録します。未対応表を変換済みとして扱わないための品質管理情報です。
 
-第51回では、全22 Excel集計資料を正規化済みです。`facts.json` に加え、用途別に `candidate_facts.json`、`party_facts.json`、`turnout_facts.json`、`judicial_review_facts.json` を出力します。PDFの表紙・候補者一覧・全体版は、Excelと重複するためraw層に保持します。
+第51回では、主要な Excel／PDF 集計資料を正規化済みです。`facts.json` に加え、用途別に `candidate_facts.json`、`party_facts.json`、`turnout_facts.json`、`judicial_review_facts.json` を出力します。PDFの表紙・候補者一覧・全体版は、Excelと重複するためraw層に保持します。
 
-主な `metric` は `candidates`、`elected_candidates`、`eligible_voters`、`voters`、`abstentions`、`turnout_rate`、`party_votes`、`current_votes`、`party_vote_share`、`valid_ballots`、`invalid_ballots`、`dismissal_yes`、`dismissal_no`、`dhondt_quotient` です。人数は `people`、票は `votes`、百分率は `percent`、0～1の比率は `ratio` として区別します。
+**未取り込み:** `04-01 管理執行上問題となった事項` は、リンク欠落で取得できない回と、PDF本文のみで構造化対象外としている回があります。倉庫の分析用 fact には入れていません（`unavailable_sources` または raw 層のみ）。
+
+主な `metric` は `candidates`、`elected_candidates`、`eligible_voters`、`voters`、`abstentions`、`turnout_rate`、`party_votes`、`current_votes`、`party_vote_share`、`valid_ballots`、`invalid_ballots`、`dismissal_yes`、`dismissal_no`、`dhondt_quotient`、`pr_list_position` です。人数は `people`、票は `votes`、百分率は `percent`、0～1の比率は `ratio` として区別します。
+
+`03-11`（比例・党派別当選人数）は第44〜51回、`03-15`（18・19歳投票）は第48回、`03-16`（年齢別投票）は第45〜48回を取り込み済みです。`03-16` の市区町村別詳細表は全国集計を優先し、細部は raw に残します。
 
 ## 古い選挙回とPDF
 

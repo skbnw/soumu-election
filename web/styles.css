@@ -31,14 +31,12 @@ body {
 .github-link:hover { color: var(--ink); }
 
 main { max-width: 1200px; margin: auto; padding: 0 24px; }
-.hero { padding: 72px 0 64px; border-bottom: 1px solid var(--line); }
-.eyebrow, .section-number { margin: 0; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .14em; }
-h1 { max-width: 750px; margin: 18px 0 20px; font-size: clamp(40px, 6vw, 72px); line-height: 1.08; letter-spacing: -.055em; font-weight: 700; }
-.lead { max-width: 720px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.8; }
+.section-number { margin: 0; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .14em; }
 
-.explorer { padding: 56px 0 72px; }
-.section-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 20px; }
-.section-heading h2, .about h2 { margin: 7px 0 0; font-size: 26px; letter-spacing: -.03em; }
+.explorer { padding: 28px 0 72px; }
+.toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.section-heading h2, .about h2 { margin: 0; font-size: 22px; letter-spacing: -.03em; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: #e5a000; }
 .status.ready .pulse { background: #1b9b62; }
@@ -162,8 +160,7 @@ footer { display: flex; justify-content: space-between; padding: 24px max(24px, 
 }
 @media (max-width: 600px) {
   .masthead { height: 56px; }
-  .hero { padding: 48px 0; }
-  .explorer { padding: 44px 0 56px; }
+  .explorer { padding: 20px 0 56px; }
   .filters,
   .filters[data-tab="muni"],
   .filters[data-tab="turnout"],

@@ -1,3 +1,4 @@
+# v1.1.1: 市町村名の文字間空白を除去
 # v1.1.0: 小選挙区+比例の市区町村別得票を parquet 化（第45〜51回）
 """Build municipality SMD/PR vote parquets for the web explorer."""
 from __future__ import annotations
@@ -95,7 +96,7 @@ def parse_smd_kaiji(kaiji: int) -> list[dict]:
                 "prefecture": item["prefecture"],
                 "prefecture_code": PREFECTURE_CODES.get(item["prefecture"]),
                 "district_number": district_number(item.get("district")),
-                "municipality": item.get("reporting_unit"),
+                "municipality": re.sub(r"[\s\u3000]+", "", str(item.get("reporting_unit") or "")) or None,
                 "subject": item.get("candidate"),
                 "candidate": item.get("candidate"),
                 "party": item.get("party"),
@@ -156,7 +157,7 @@ def parse_pr_kaiji(kaiji: int) -> list[dict]:
                 "prefecture": prefecture,
                 "prefecture_code": PREFECTURE_CODES.get(prefecture) if prefecture else None,
                 "district_number": None,
-                "municipality": item.get("reporting_unit"),
+                "municipality": re.sub(r"[\s\u3000]+", "", str(item.get("reporting_unit") or "")) or None,
                 "pr_block": item.get("block"),
                 "subject": item.get("party"),
                 "candidate": None,
