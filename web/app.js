@@ -1,6 +1,9 @@
 /*
  * 総務省選挙データ横断検索β — DuckDB-Wasm 検索
- * v2.9.3
+ * v2.9.4
+ * - 参院第24回（2016）を接続
+ * - 起動失敗時にエラー詳細を表示、市区町村読込失敗でも全国集計を継続
+ * - DuckDB初期化タイムアウトを延長
  * - 衆院小選挙区に当落・党派・相対得票率・惜敗率を表示
  * - 参院第25回（2019）を接続
  * - 市区町村名の選挙区接尾辞を統一（全角括弧＋半角数字）
@@ -121,7 +124,7 @@ function keywordCompactSql(column) {
   return `replace(replace(coalesce(CAST(${column} AS VARCHAR), ''), ' ', ''), chr(12288), '') ILIKE '%${escapeSql(q)}%'`;
 }
 const html = (value) => String(value ?? '—').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const INIT_TIMEOUT_MS = 60000;
+const INIT_TIMEOUT_MS = 120000;
 
 function resultLimit() {
   const n = Number(els.resultLimit?.value || 100);
@@ -209,6 +212,7 @@ const ELECTION_YEARS = {
     48: 2017, 49: 2021, 50: 2024, 51: 2026
   },
   sangiin: {
+    24: 2016,
     25: 2019,
     26: 2022,
     27: 2025
@@ -1274,46 +1278,63 @@ async function loadCoverage() {
   }
 
   if (state.hasMunicipality) {
-    const loadMuniFor = async (chamberFilter, category) => {
-      const muniMeta = await state.conn.query(`
-        SELECT list_sort(list_distinct(list(election_kaiji))) elections,
-               list_sort(list_distinct(list(prefecture))) prefectures
-        FROM read_parquet('municipality_facts.parquet')
-        WHERE prefecture IS NOT NULL AND ${chamberFilter}`);
-      const meta = muniMeta.toArray()[0].toJSON();
-      const toNums = (list) => Array.from(list ?? []).map(Number).sort((a, b) => b - a);
-      const muniDistricts = await state.conn.query(`
-        SELECT prefecture, list_sort(list_distinct(list(district_number))) districts
-        FROM read_parquet('municipality_facts.parquet')
-        WHERE category = '${category}' AND district_number IS NOT NULL AND prefecture IS NOT NULL
-          AND ${chamberFilter}
-        GROUP BY prefecture`);
-      const byPref = {};
-      for (const row of muniDistricts.toArray()) {
-        const item = row.toJSON();
-        byPref[String(item.prefecture)] = Array.from(item.districts ?? []).map(Number);
-      }
-      return {
-        elections: toNums(meta.elections),
-        prefectures: sortPrefectures(Array.from(meta.prefectures ?? []).map(String)),
-        districtsByPref: byPref
+    try {
+      const loadMuniFor = async (chamberFilter, category) => {
+        const electionsRows = await state.conn.query(`
+          SELECT DISTINCT election_kaiji
+          FROM read_parquet('municipality_facts.parquet')
+          WHERE prefecture IS NOT NULL AND ${chamberFilter}
+          ORDER BY election_kaiji DESC`);
+        const prefRows = await state.conn.query(`
+          SELECT DISTINCT prefecture
+          FROM read_parquet('municipality_facts.parquet')
+          WHERE prefecture IS NOT NULL AND ${chamberFilter}`);
+        const muniDistricts = await state.conn.query(`
+          SELECT DISTINCT prefecture, district_number
+          FROM read_parquet('municipality_facts.parquet')
+          WHERE category = '${category}' AND district_number IS NOT NULL AND prefecture IS NOT NULL
+            AND ${chamberFilter}
+          ORDER BY prefecture, district_number`);
+        const byPref = {};
+        for (const row of muniDistricts.toArray()) {
+          const item = row.toJSON();
+          const pref = String(item.prefecture);
+          if (!byPref[pref]) byPref[pref] = [];
+          byPref[pref].push(Number(item.district_number));
+        }
+        return {
+          elections: electionsRows.toArray().map((r) => Number(r.toJSON().election_kaiji)),
+          prefectures: sortPrefectures(prefRows.toArray().map((r) => String(r.toJSON().prefecture))),
+          districtsByPref: byPref
+        };
       };
-    };
-    const shugiinMuni = await loadMuniFor(`(chamber IS NULL OR chamber = 'shugiin')`, '小選挙区');
-    const sangiinMuni = await loadMuniFor(`chamber = 'sangiin'`, '選挙区');
-    state.electionsByChamber.shugiin.muni = shugiinMuni.elections;
-    state.electionsByChamber.sangiin.muni = sangiinMuni.elections;
-    state.electionsByTab.muni = shugiinMuni.elections;
-    state.muniPrefectures = shugiinMuni.prefectures;
-    state.muniPrefecturesByChamber = {
-      shugiin: shugiinMuni.prefectures,
-      sangiin: sangiinMuni.prefectures
-    };
-    state.muniDistrictsByPref = shugiinMuni.districtsByPref;
-    state.muniDistrictsByChamber = {
-      shugiin: shugiinMuni.districtsByPref,
-      sangiin: sangiinMuni.districtsByPref
-    };
+      const runMuniCoverage = async () => {
+        const shugiinMuni = await loadMuniFor(`(chamber IS NULL OR chamber = 'shugiin')`, '小選挙区');
+        const sangiinMuni = await loadMuniFor(`chamber = 'sangiin'`, '選挙区');
+        state.electionsByChamber.shugiin.muni = shugiinMuni.elections;
+        state.electionsByChamber.sangiin.muni = sangiinMuni.elections;
+        state.electionsByTab.muni = shugiinMuni.elections;
+        state.muniPrefectures = shugiinMuni.prefectures;
+        state.muniPrefecturesByChamber = {
+          shugiin: shugiinMuni.prefectures,
+          sangiin: sangiinMuni.prefectures
+        };
+        state.muniDistrictsByPref = shugiinMuni.districtsByPref;
+        state.muniDistrictsByChamber = {
+          shugiin: shugiinMuni.districtsByPref,
+          sangiin: sangiinMuni.districtsByPref
+        };
+      };
+      await withTimeout(runMuniCoverage(), INIT_TIMEOUT_MS, 'municipality coverage');
+    } catch (muniCoverageError) {
+      console.warn('municipality coverage skipped', muniCoverageError);
+      state.hasMunicipality = false;
+      state.electionsByTab.muni = [];
+      state.muniPrefectures = [];
+      state.muniPrefecturesByChamber = { shugiin: [], sangiin: [] };
+      state.muniDistrictsByPref = {};
+      state.muniDistrictsByChamber = { shugiin: {}, sangiin: {} };
+    }
   } else {
     state.electionsByTab.muni = [];
     state.muniPrefectures = [];
@@ -1369,7 +1390,15 @@ async function init() {
     const muniResponse = await fetch(new URL('./data/municipality_facts.parquet', window.location.href).href);
     state.hasMunicipality = muniResponse.ok;
     if (state.hasMunicipality) {
-      await state.db.registerFileBuffer('municipality_facts.parquet', new Uint8Array(await muniResponse.arrayBuffer()));
+      try {
+        await state.db.registerFileBuffer(
+          'municipality_facts.parquet',
+          new Uint8Array(await muniResponse.arrayBuffer())
+        );
+      } catch (muniError) {
+        console.warn('municipality parquet register skipped', muniError);
+        state.hasMunicipality = false;
+      }
     }
 
     state.conn = await state.db.connect();
@@ -1383,8 +1412,9 @@ async function init() {
     applyTab('smd');
   } catch (error) {
     console.error(error);
+    const detail = String(error?.message || error).slice(0, 160);
     els.status.className = 'status error';
-    els.status.innerHTML = '<span class="pulse"></span>読み込みに失敗しました';
+    els.status.innerHTML = `<span class="pulse"></span>読み込みに失敗しました${detail ? `（${detail}）` : ''}`;
     els.results.innerHTML = emptyRow(8, 'データを読み込めませんでした。通信環境を確認して再読み込みしてください。');
   }
 }
