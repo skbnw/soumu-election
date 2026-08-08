@@ -207,6 +207,13 @@ def main() -> int:
         "validation": {name: status for name, status, _, _ in checks},
     }
     (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    web_meta = root / "web" / "data" / "meta.json"
+    if web_meta.parent.exists():
+        web_meta.write_text(json.dumps({
+            "generated_at": manifest["generated_at"],
+            "election_kaiji": args.kaiji,
+            "facts": counts.get("facts"),
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     con.close()
     facts_ndjson.unlink(missing_ok=True)
     print(json.dumps(manifest, ensure_ascii=False))

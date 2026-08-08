@@ -1,3 +1,4 @@
+# v1.1.2: 候補者名・党派名の文字間空白も除去
 # v1.1.1: 市町村名の文字間空白を除去
 # v1.1.0: 小選挙区+比例の市区町村別得票を parquet 化（第45〜51回）
 """Build municipality SMD/PR vote parquets for the web explorer."""
@@ -26,6 +27,11 @@ PREFECTURE_CODES = {
         "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
         "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県"), 1)
 }
+
+
+def compact_name(value: object) -> str | None:
+    text = re.sub(r"[\s\u3000]+", "", str(value or ""))
+    return text or None
 
 
 def source_code_from_name(name: str, prefix: str) -> str:
@@ -96,10 +102,10 @@ def parse_smd_kaiji(kaiji: int) -> list[dict]:
                 "prefecture": item["prefecture"],
                 "prefecture_code": PREFECTURE_CODES.get(item["prefecture"]),
                 "district_number": district_number(item.get("district")),
-                "municipality": re.sub(r"[\s\u3000]+", "", str(item.get("reporting_unit") or "")) or None,
-                "subject": item.get("candidate"),
-                "candidate": item.get("candidate"),
-                "party": item.get("party"),
+                "municipality": compact_name(item.get("reporting_unit")),
+                "subject": compact_name(item.get("candidate")),
+                "candidate": compact_name(item.get("candidate")),
+                "party": compact_name(item.get("party")),
                 "metric": "candidate_votes",
                 "value": item.get("votes"),
                 "unit": "votes",
@@ -157,11 +163,11 @@ def parse_pr_kaiji(kaiji: int) -> list[dict]:
                 "prefecture": prefecture,
                 "prefecture_code": PREFECTURE_CODES.get(prefecture) if prefecture else None,
                 "district_number": None,
-                "municipality": re.sub(r"[\s\u3000]+", "", str(item.get("reporting_unit") or "")) or None,
+                "municipality": compact_name(item.get("reporting_unit")),
                 "pr_block": item.get("block"),
-                "subject": item.get("party"),
+                "subject": compact_name(item.get("party")),
                 "candidate": None,
-                "party": item.get("party"),
+                "party": compact_name(item.get("party")),
                 "metric": "party_votes",
                 "value": item.get("votes"),
                 "unit": "votes",

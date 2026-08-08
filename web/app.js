@@ -1,6 +1,12 @@
 /*
  * 衆院選データ横断検索β — DuckDB-Wasm 検索
- * v2.4.4
+ * v2.4.10
+ * - 人名表示は漢字を基本（かなは candidate_raw 経由で検索ヒット）
+ * - 結果のページ送り（1ページ件数 × 前後移動）
+ * - 人名表示: 3行レイアウトの短い読み断片（例:「こ」）を捨て、最長のかな行を採用
+ * - 人名/党派名の空白ゆれを除去し、かな＋漢字を併記表示
+ * - 結果表から出典列を非表示
+ * - 表示件数上限（50/100/200/500）とヘッダ更新日時
  * - 「検索」見出し削除、比例全国は03-05今回得票、票表示は四捨五入
  * - ヒーロー見出しを削り、ヘッダ表記を「衆院選データ横断検索β」に統一
  * - 起動時の市区町村全件インデックス読込をやめ、プルダウンは都度SQL取得（起動ハング対策）
@@ -14,6 +20,8 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const state = {
   db: null, conn: null, rows: [], ready: false, tab: 'smd',
+  page: 1,
+  matchTotal: 0,
   electionsByTab: { smd: [], muni: [], pr: [], turnout: [], judicial: [] },
   partiesByElection: {},
   districtsByPref: {},
@@ -32,7 +40,10 @@ const els = {
   keywordLabel: $('#keyword-label'), search: $('#search'), status: $('#status'),
   results: $('#results'), head: $('#result-head'), download: $('#download'),
   matchCount: $('#match-count'), shownCount: $('#shown-count'),
-  resultLabel: $('#result-label'), tabNote: $('#tab-note')
+  resultLabel: $('#result-label'), tabNote: $('#tab-note'),
+  resultLimit: $('#result-limit'), updatedAt: $('#updated-at'),
+  pager: $('#pager'), pagePrev: $('#page-prev'), pageNext: $('#page-next'),
+  pageStatus: $('#page-status'), tableShell: $('.table-shell')
 };
 
 const escapeSql = (value) => String(value).replaceAll("'", "''");
@@ -47,9 +58,108 @@ function formatValue(value, unit) {
   if (unit === 'votes' || unit === 'people') return displayVotes.format(Math.round(n));
   return displayNumber.format(n);
 }
+
+/** 氏名・党派名の文字間空白を除去 */
+function stripSpaces(value) {
+  return String(value ?? '').replace(/[\s\u3000]+/g, '');
+}
+
+/**
+ * 表示用の人名は漢字を基本とする。
+ * 読み仮名は candidate_raw に残し、キーワード検索側で空白無視マッチする。
+ */
+function displayPersonName(name, raw) {
+  const compactName = stripSpaces(name);
+  if (compactName) return compactName;
+  if (!raw) return '—';
+  const paren = String(raw).match(/[（(]\s*([^）)]+?)\s*[）)]/);
+  if (paren) {
+    const kanji = stripSpaces(paren[1]);
+    if (kanji) return kanji;
+  }
+  return stripSpaces(raw) || '—';
+}
+
+function displayLabel(value) {
+  const compact = stripSpaces(value);
+  return compact || '—';
+}
+
+function keywordCompactSql(column) {
+  const q = stripSpaces(els.keyword.value);
+  if (!q) return '';
+  return `replace(replace(coalesce(CAST(${column} AS VARCHAR), ''), ' ', ''), chr(12288), '') ILIKE '%${escapeSql(q)}%'`;
+}
 const html = (value) => String(value ?? '—').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const INIT_TIMEOUT_MS = 60000;
-const RESULT_LIMIT = 500;
+
+function resultLimit() {
+  const n = Number(els.resultLimit?.value || 100);
+  return Number.isFinite(n) && n > 0 ? n : 100;
+}
+
+function pageOffset() {
+  return Math.max(0, (Number(state.page) - 1) * resultLimit());
+}
+
+function pageCount(total = state.matchTotal) {
+  return Math.max(1, Math.ceil(Math.max(0, Number(total) || 0) / resultLimit()));
+}
+
+function limitOffsetSql() {
+  return `LIMIT ${resultLimit()} OFFSET ${pageOffset()}`;
+}
+
+function updatePager() {
+  if (!els.pager) return;
+  const total = Number(state.matchTotal) || 0;
+  const pages = pageCount(total);
+  if (state.page > pages) state.page = pages;
+  if (state.page < 1) state.page = 1;
+  const limit = resultLimit();
+  const start = total === 0 ? 0 : (state.page - 1) * limit + 1;
+  const end = Math.min(state.page * limit, total);
+  els.shownCount.textContent = total === 0
+    ? '0'
+    : `${displayNumber.format(start)}–${displayNumber.format(end)}`;
+  if (els.pageStatus) els.pageStatus.textContent = `${state.page} / ${pages} ページ`;
+  if (els.pagePrev) els.pagePrev.disabled = !state.ready || state.page <= 1;
+  if (els.pageNext) els.pageNext.disabled = !state.ready || state.page >= pages || total === 0;
+  els.pager.hidden = total <= limit;
+}
+
+function formatUpdatedAt(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
+async function loadUpdatedAt() {
+  if (!els.updatedAt) return;
+  try {
+    const response = await fetch(new URL('./data/meta.json', window.location.href).href, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`meta ${response.status}`);
+    const meta = await response.json();
+    const label = formatUpdatedAt(meta.generated_at);
+    if (!label) throw new Error('invalid generated_at');
+    els.updatedAt.dateTime = meta.generated_at;
+    els.updatedAt.textContent = `更新 ${label}`;
+  } catch (error) {
+    console.warn('updated_at', error);
+    els.updatedAt.textContent = '更新 —';
+  }
+}
 
 const ELECTION_YEARS = {
   44: 2005, 45: 2009, 46: 2012, 47: 2014,
@@ -153,17 +263,17 @@ const emptyRow = (cols, message) => `<tr><td colspan="${cols}" class="empty">${m
 
 function prHeaders() {
   const level = els.geoLevel.value;
-  if (level === 'national') return ['選挙回次', '政党', '得票', '単位', '出典'];
-  if (level === 'block') return ['選挙回次', '比例ブロック', '政党', '得票', '単位', '出典'];
-  return ['選挙回次', '比例ブロック', '都道府県', '政党', '得票', '単位', '出典'];
+  if (level === 'national') return ['選挙回次', '政党', '得票', '単位'];
+  if (level === 'block') return ['選挙回次', '比例ブロック', '政党', '得票', '単位'];
+  return ['選挙回次', '比例ブロック', '都道府県', '政党', '得票', '単位'];
 }
 
 function currentHeaders() {
-  if (state.tab === 'smd') return ['選挙回次', '都道府県', '選挙区', '候補者', '性別', '得票', '単位', '出典'];
-  if (state.tab === 'muni') return ['選挙回次', '区分', '都道府県', '選挙区', '市区町村', '項目', '党派', '値', '単位', '粒度', '出典'];
+  if (state.tab === 'smd') return ['選挙回次', '都道府県', '選挙区', '候補者', '性別', '得票', '単位'];
+  if (state.tab === 'muni') return ['選挙回次', '区分', '都道府県', '選挙区', '市区町村', '項目', '党派', '値', '単位', '粒度'];
   if (state.tab === 'pr') return prHeaders();
-  if (state.tab === 'turnout') return ['選挙回次', '選挙区分', '集計範囲', '都道府県', '指標', '性別', '値', '単位', '出典'];
-  return ['選挙回次', '都道府県', '裁判官', '指標', '値', '単位', '出典'];
+  if (state.tab === 'turnout') return ['選挙回次', '選挙区分', '集計範囲', '都道府県', '指標', '性別', '値', '単位'];
+  return ['選挙回次', '都道府県', '裁判官', '指標', '値', '単位'];
 }
 
 async function clearLegacyCoiServiceWorker() {
@@ -202,7 +312,7 @@ async function createDuckDbWorker(mainWorkerUrl) {
 
 function setControlsEnabled(enabled) {
   [els.election, els.prefecture, els.district, els.municipality, els.contest, els.scope,
-    els.geoLevel, els.prBlock, els.prParty, els.metric, els.keyword, els.search]
+    els.geoLevel, els.prBlock, els.prParty, els.metric, els.keyword, els.search, els.resultLimit]
     .forEach((el) => { if (el) el.disabled = !enabled; });
   $$('.tab').forEach((tab) => { tab.disabled = !enabled; });
 }
@@ -335,7 +445,11 @@ function whereClauseSmd() {
     ...commonFilters({ includePref: true, includeDistrict: true })
   ];
   if (els.keyword.value.trim()) {
-    parts.push(`coalesce(candidate, '') ILIKE '%${escapeSql(els.keyword.value.trim())}%'`);
+    const partsKeyword = [
+      keywordCompactSql('candidate'),
+      keywordCompactSql('candidate_raw')
+    ].filter(Boolean);
+    parts.push(`(${partsKeyword.join(' OR ')})`);
   }
   return parts.join(' AND ');
 }
@@ -344,8 +458,12 @@ function whereClauseMuniCore() {
   const parts = [...commonFilters({ includePref: true, includeDistrict: false, includeMunicipality: true })];
   // district filter applies only to SMD rows inside the UNION
   if (els.keyword.value.trim()) {
-    const q = escapeSql(els.keyword.value.trim());
-    parts.push(`(coalesce(subject, '') ILIKE '%${q}%' OR coalesce(party, '') ILIKE '%${q}%' OR coalesce(candidate, '') ILIKE '%${q}%')`);
+    const partsKeyword = [
+      keywordCompactSql('subject'),
+      keywordCompactSql('party'),
+      keywordCompactSql('candidate')
+    ].filter(Boolean);
+    parts.push(`(${partsKeyword.join(' OR ')})`);
   }
   return parts.join(' AND ');
 }
@@ -385,7 +503,7 @@ function whereClauseJudicial() {
     ...commonFilters({ includePref: true })
   ];
   if (els.keyword.value.trim()) {
-    parts.push(`coalesce(justice, '') ILIKE '%${escapeSql(els.keyword.value.trim())}%'`);
+    parts.push(keywordCompactSql('justice'));
   }
   return parts.join(' AND ');
 }
@@ -393,10 +511,10 @@ function whereClauseJudicial() {
 function selectSql() {
   if (state.tab === 'smd') {
     return `SELECT election_kaiji, prefecture, prefecture_code, district_number,
-      candidate, gender, value, unit, source_code
+      candidate, candidate_raw, gender, value, unit, source_code
       FROM read_parquet('facts.parquet') WHERE ${whereClauseSmd()}
       ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, district_number NULLS LAST, value DESC NULLS LAST
-      LIMIT ${RESULT_LIMIT}`;
+      ${limitOffsetSql()}`;
   }
 
   if (state.tab === 'muni') {
@@ -482,7 +600,7 @@ function selectSql() {
                prefecture_code NULLS LAST,
                district_number NULLS LAST,
                value DESC NULLS LAST
-      LIMIT ${RESULT_LIMIT}`;
+      ${limitOffsetSql()}`;
   }
 
   if (state.tab === 'pr') {
@@ -505,7 +623,7 @@ function selectSql() {
           ${partyNotTotal} ${electionFilter} ${partyFilter}
           AND coalesce(party, '') NOT IN ('合計', '計', '諸派')
         ORDER BY election_kaiji DESC, value DESC NULLS LAST
-        LIMIT ${RESULT_LIMIT}`;
+        ${limitOffsetSql()}`;
     }
 
     if (level === 'block') {
@@ -517,7 +635,7 @@ function selectSql() {
           ${electionFilter} ${blockFilter} ${partyNotTotal} ${partyFilter}
         GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), party
         ORDER BY election_kaiji DESC, value DESC NULLS LAST
-        LIMIT ${RESULT_LIMIT}`;
+        ${limitOffsetSql()}`;
     }
 
     return `
@@ -532,7 +650,7 @@ function selectSql() {
         ${electionFilter} ${blockFilter} ${prefFilter} ${partyNotTotal} ${partyFilter}
       GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), prefecture, party
       ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, value DESC NULLS LAST
-      LIMIT ${RESULT_LIMIT}`;
+      ${limitOffsetSql()}`;
     }
 
   if (state.tab === 'turnout') {
@@ -543,27 +661,19 @@ function selectSql() {
                CASE scope WHEN 'all' THEN 0 WHEN 'overseas' THEN 1 ELSE 2 END,
                prefecture_code NULLS LAST,
                CASE gender WHEN 'total' THEN 0 WHEN 'male' THEN 1 WHEN 'female' THEN 2 ELSE 3 END
-      LIMIT ${RESULT_LIMIT}`;
+      ${limitOffsetSql()}`;
   }
 
   return `SELECT election_kaiji, prefecture, prefecture_code, justice,
     metric, value, unit, source_code
     FROM read_parquet('facts.parquet') WHERE ${whereClauseJudicial()}
     ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, justice NULLS LAST, value DESC NULLS LAST
-    LIMIT ${RESULT_LIMIT}`;
+    ${limitOffsetSql()}`;
 }
 
 function countSql() {
-  if (state.tab === 'pr') {
-    return `SELECT count(*) AS count FROM (${selectSql().replace(new RegExp(` LIMIT ${RESULT_LIMIT}$`), '')})`;
-  }
-  if (state.tab === 'muni') {
-    return `SELECT count(*) AS count FROM (${selectSql().replace(new RegExp(` LIMIT ${RESULT_LIMIT}$`), '')})`;
-  }
-  const where = state.tab === 'smd' ? whereClauseSmd()
-    : state.tab === 'turnout' ? whereClauseTurnout()
-      : whereClauseJudicial();
-  return `SELECT count(*) AS count FROM read_parquet('facts.parquet') WHERE ${where}`;
+  const sql = selectSql().replace(/\s+LIMIT\s+\d+\s+OFFSET\s+\d+\s*$/i, '');
+  return `SELECT count(*) AS count FROM (${sql})`;
 }
 
 function renderRows() {
@@ -595,11 +705,10 @@ function renderRows() {
       <td>${html(electionLabel(row.election_kaiji))}</td>
       <td>${html(row.prefecture)}</td>
       <td>${html(districtLabel(row.district_number))}</td>
-      <td>${html(row.candidate)}</td>
+      <td>${html(displayPersonName(row.candidate, row.candidate_raw))}</td>
       <td>${html(genderLabel(row.gender))}</td>
       <td class="numeric">${formatValue(row.value, row.unit)}</td>
-      <td>${html(row.unit)}</td>
-      <td>${html(row.source_code)}</td></tr>`).join('');
+      <td>${html(row.unit)}</td></tr>`).join('');
     return;
   }
 
@@ -610,13 +719,12 @@ function renderRows() {
       <td>${html(row.category)}</td>
       <td>${html(row.prefecture)}</td>
       <td>${html(districtLabel(row.district_number))}</td>
-      <td>${html(row.municipality)}</td>
-      <td>${html(row.subject)}</td>
-      <td>${html(row.party)}</td>
+      <td>${html(displayLabel(row.municipality))}</td>
+      <td>${html(displayLabel(row.subject))}</td>
+      <td>${html(displayLabel(row.party))}</td>
       <td class="numeric">${formatValue(row.value, row.unit)}</td>
       <td>${html(row.unit)}</td>
-      <td>${html(grainLabel(row.grain))}</td>
-      <td>${html(row.source_code)}</td></tr>`).join('');
+      <td>${html(grainLabel(row.grain))}</td></tr>`).join('');
     return;
   }
 
@@ -627,28 +735,25 @@ function renderRows() {
       if (level === 'national') {
         return `<tr>
           <td>${html(electionLabel(row.election_kaiji))}</td>
-          <td>${html(row.party)}</td>
+          <td>${html(displayLabel(row.party))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
-          <td>${html(row.unit)}</td>
-          <td>${html(row.source_code)}</td></tr>`;
+          <td>${html(row.unit)}</td></tr>`;
       }
       if (level === 'block') {
         return `<tr>
           <td>${html(electionLabel(row.election_kaiji))}</td>
           <td>${html(block)}</td>
-          <td>${html(row.party)}</td>
+          <td>${html(displayLabel(row.party))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
-          <td>${html(row.unit)}</td>
-          <td>${html(row.source_code)}</td></tr>`;
+          <td>${html(row.unit)}</td></tr>`;
       }
       return `<tr>
         <td>${html(electionLabel(row.election_kaiji))}</td>
         <td>${html(block)}</td>
         <td>${html(row.prefecture)}</td>
-        <td>${html(row.party)}</td>
+        <td>${html(displayLabel(row.party))}</td>
         <td class="numeric">${formatValue(row.value, row.unit)}</td>
-        <td>${html(row.unit)}</td>
-        <td>${html(row.source_code)}</td></tr>`;
+        <td>${html(row.unit)}</td></tr>`;
     }).join('');
     return;
   }
@@ -662,48 +767,50 @@ function renderRows() {
       <td>${html(metricLabel(row.metric))}</td>
       <td>${html(genderLabel(row.gender))}</td>
       <td class="numeric">${formatValue(row.value, row.unit)}</td>
-      <td>${html(row.unit)}</td>
-      <td>${html(row.source_code)}</td></tr>`).join('');
+      <td>${html(row.unit)}</td></tr>`).join('');
     return;
   }
 
   els.results.innerHTML = sorted.map((row) => `<tr>
     <td>${html(electionLabel(row.election_kaiji))}</td>
     <td>${html(row.prefecture)}</td>
-    <td>${html(row.justice)}</td>
+    <td>${html(displayLabel(row.justice))}</td>
     <td>${html(metricLabel(row.metric))}</td>
     <td class="numeric">${formatValue(row.value, row.unit)}</td>
-    <td>${html(row.unit)}</td>
-    <td>${html(row.source_code)}</td></tr>`).join('');
+    <td>${html(row.unit)}</td></tr>`).join('');
 }
 
 function csvRowValues(row) {
   if (state.tab === 'smd') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.prefecture, row.district_number,
-      row.candidate, row.gender, genderLabel(row.gender), row.value, row.unit, row.source_code];
+      displayPersonName(row.candidate, row.candidate_raw), row.gender, genderLabel(row.gender),
+      row.value, row.unit, row.source_code];
   }
   if (state.tab === 'muni') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.category, row.prefecture,
-      row.district_number, row.municipality, row.subject, row.party, row.value, row.unit, row.grain, row.source_code];
+      row.district_number, displayLabel(row.municipality), displayLabel(row.subject), displayLabel(row.party),
+      row.value, row.unit, row.grain, row.source_code];
   }
   if (state.tab === 'pr') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', els.geoLevel.value,
-      normalizeBlock(row.pr_block), row.prefecture, row.party, row.value, row.unit, row.source_code];
+      normalizeBlock(row.pr_block), row.prefecture, displayLabel(row.party), row.value, row.unit, row.source_code];
   }
   if (state.tab === 'turnout') {
     return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.contest, contestLabel(row.contest),
       row.scope, scopeLabel(row.scope), row.prefecture, row.metric, metricLabel(row.metric),
       row.gender, genderLabel(row.gender), row.value, row.unit, row.source_code];
   }
-  return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.prefecture, row.justice,
+  return [row.election_kaiji, ELECTION_YEARS[row.election_kaiji] ?? '', row.prefecture, displayLabel(row.justice),
     row.metric, metricLabel(row.metric), row.value, row.unit, row.source_code];
 }
 
-async function runSearch(event) {
+async function runSearch(event, { resetPage = true } = {}) {
   event?.preventDefault();
   if (!state.ready) return;
+  if (resetPage) state.page = 1;
   if (state.tab === 'muni' && !state.hasMunicipality) {
     els.results.innerHTML = emptyRow(currentHeaders().length, '市区町村データが読み込まれていません。');
+    updatePager();
     return;
   }
   const headers = currentHeaders();
@@ -713,23 +820,39 @@ async function runSearch(event) {
   els.form.dataset.geolevel = els.geoLevel.value || 'prefecture';
   els.search.disabled = true;
   els.search.textContent = '検索中…';
+  if (els.pagePrev) els.pagePrev.disabled = true;
+  if (els.pageNext) els.pageNext.disabled = true;
   try {
     const [summary, result] = await Promise.all([
       state.conn.query(countSql()),
       state.conn.query(selectSql())
     ]);
     const totals = summary.toArray()[0].toJSON();
-    state.rows = result.toArray().map((row) => row.toJSON());
-    els.matchCount.textContent = displayNumber.format(Number(totals.count));
-    els.shownCount.textContent = displayNumber.format(state.rows.length);
+    state.matchTotal = Number(totals.count) || 0;
+    const pages = pageCount(state.matchTotal);
+    let fetched = result.toArray().map((row) => row.toJSON());
+    if (state.page > pages) {
+      state.page = pages;
+      fetched = (await state.conn.query(selectSql())).toArray().map((row) => row.toJSON());
+    }
+    state.rows = fetched;
+    els.matchCount.textContent = displayNumber.format(state.matchTotal);
+    updatePager();
     const tab = TABS[state.tab];
     const metric = tab.fixedMetric || els.metric.value;
     const geo = state.tab === 'pr' ? ` / ${GEO_LEVEL_LABELS[els.geoLevel.value]}` : '';
-    els.resultLabel.textContent = `${tab.title}${geo} / ${metricLabel(metric)} — 最大${RESULT_LIMIT}件を表示`;
+    const pageNote = state.matchTotal > resultLimit()
+      ? `${resultLimit()}件ずつ / ${pageCount()}ページ`
+      : `${displayNumber.format(state.rows.length)}件を表示`;
+    els.resultLabel.textContent = `${tab.title}${geo} / ${metricLabel(metric)} — ${pageNote}`;
     els.download.disabled = state.rows.length === 0;
     renderRows();
+    els.tableShell?.scrollTo?.({ top: 0 });
   } catch (error) {
     console.error(error);
+    state.rows = [];
+    state.matchTotal = 0;
+    updatePager();
     els.results.innerHTML = emptyRow(headers.length, '検索に失敗しました。条件を変えて再試行してください。');
   } finally {
     els.search.disabled = false;
@@ -834,6 +957,7 @@ async function loadCoverage() {
 
 async function init() {
   applyTab('smd', { search: false });
+  loadUpdatedAt();
   try {
     await clearLegacyCoiServiceWorker();
     const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
@@ -891,8 +1015,21 @@ els.geoLevel.addEventListener('change', () => {
   els.form.dataset.geolevel = els.geoLevel.value;
   if (state.ready && state.tab === 'pr') runSearch();
 });
+els.resultLimit?.addEventListener('change', () => {
+  if (state.ready) runSearch();
+});
 els.prParty?.addEventListener('change', () => {
   if (state.ready && state.tab === 'pr') runSearch();
+});
+els.pagePrev?.addEventListener('click', () => {
+  if (!state.ready || state.page <= 1) return;
+  state.page -= 1;
+  runSearch(null, { resetPage: false });
+});
+els.pageNext?.addEventListener('click', () => {
+  if (!state.ready || state.page >= pageCount()) return;
+  state.page += 1;
+  runSearch(null, { resetPage: false });
 });
 els.form.addEventListener('submit', runSearch);
 els.download.addEventListener('click', downloadCsv);

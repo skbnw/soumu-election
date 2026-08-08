@@ -14,7 +14,10 @@
       <span class="brand-mark" aria-hidden="true">衆</span>
       <span>衆院選データ横断検索β</span>
     </a>
-    <a class="github-link" href="https://github.com/skbnw/soumu-election" target="_blank" rel="noreferrer">GitHub ↗</a>
+    <div class="masthead-right">
+      <time id="updated-at" class="updated-at" datetime="">更新 —</time>
+      <a class="github-link" href="https://github.com/skbnw/soumu-election" target="_blank" rel="noreferrer">GitHub ↗</a>
+    </div>
   </header>
 
   <main>
@@ -85,7 +88,20 @@
 
       <div class="summary-grid" aria-live="polite">
         <article><span>該当レコード</span><strong id="match-count">—</strong></article>
-        <article><span>表示件数</span><strong id="shown-count">—</strong></article>
+        <article class="summary-limit">
+          <span>表示件数</span>
+          <div class="limit-row">
+            <strong id="shown-count">—</strong>
+            <label class="limit-label">1ページ
+              <select id="result-limit" disabled>
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+              </select>
+            </label>
+          </div>
+        </article>
       </div>
 
       <div class="table-bar">
@@ -98,6 +114,11 @@
           <tbody id="results"><tr><td colspan="8" class="empty">データを読み込んでいます…</td></tr></tbody>
         </table>
       </div>
+      <nav id="pager" class="pager" aria-label="結果のページ" hidden>
+        <button type="button" id="page-prev" class="pager-btn" disabled>前へ</button>
+        <span id="page-status">1 / 1 ページ</span>
+        <button type="button" id="page-next" class="pager-btn" disabled>次へ</button>
+      </nav>
     </section>
 
     <section class="about">
