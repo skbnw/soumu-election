@@ -24,7 +24,9 @@ async function init() {
     await state.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
     const factsUrl = new URL('./data/facts.parquet', window.location.href).href;
-    await state.db.registerFileURL('facts.parquet', factsUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+    const factsResponse = await fetch(factsUrl);
+    if (!factsResponse.ok) throw new Error(`データ取得失敗: ${factsResponse.status}`);
+    await state.db.registerFileBuffer('facts.parquet', new Uint8Array(await factsResponse.arrayBuffer()));
     state.conn = await state.db.connect();
     const dimensions = await state.conn.query(`
       SELECT list_sort(list_distinct(list(election_kaiji))) elections,
