@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# v1.2.2: 参院市区町村ハブを _7/_8 両対応、indexの「市区町村別得票」リンクも利用、404をスキップ
 # v1.2.1: 合同選挙区を district 分類（衆院「○○選挙区」比例と区別）
 # v1.2.0: 参院市区町村を sangiinN_8.html ツリーから取得（shikuchouson フォールバック）
 # v1.1.0: --chamber sangiin 対応（参院 index 取得・項番マップ）
@@ -274,8 +275,8 @@ def discover_municipality_pages(
     subpages: list[tuple[str, str]] = []
     for anchor in soup.find_all("a", href=True):
         href = anchor["href"]
-        # 衆院: shikuchouson_XX.html / 参院: sangiinN_8_XX.html
-        if not re.search(r"(?:shikuchouson_\d+|sangiin\d+_8_\d+)\.html$", href):
+        # 衆院: shikuchouson_XX.html / 参院: sangiinN_7_XX.html or sangiinN_8_XX.html
+        if not re.search(r"(?:shikuchouson_\d+|sangiin\d+_[78]_\d+)\.html$", href):
             continue
         subpages.append((urljoin(page_url, href), clean_text(anchor.get_text(" ", strip=True)) or "unknown"))
     if not subpages:
@@ -310,14 +311,33 @@ def discover(
         pages.append(municipality_page)
         municipality_links = discover_municipality_pages(session, municipality_page)
     elif chamber == "sangiin":
-        # 参院26回以降: sangiinN_8.html → sangiinN_8_XX.html
-        tree_page = f"{base}/{chamber}{kaiji}_8.html"
-        legacy_page = f"{base}/shikuchouson.html"
+        # 参院: 回によって sangiinN_8.html / sangiinN_7.html / index直リンク
+        candidates: list[str] = []
+        try:
+            index_resp = get(session, pages[0])
+            index_resp.encoding = index_resp.apparent_encoding or "shift_jis"
+            index_soup = BeautifulSoup(index_resp.text, "html.parser")
+            for anchor in index_soup.find_all("a", href=True):
+                label = clean_text(anchor.get_text(" ", strip=True))
+                href = urljoin(pages[0], anchor["href"])
+                if "市区町村別得票" in label and href.endswith(".html"):
+                    candidates.append(href)
+        except Exception:
+            pass
+        candidates.extend([
+            f"{base}/{chamber}{kaiji}_8.html",
+            f"{base}/{chamber}{kaiji}_7.html",
+            f"{base}/shikuchouson.html",
+        ])
         municipality_page = None
-        for candidate in (tree_page, legacy_page):
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
             try:
                 probe = get(session, candidate)
-            except requests.HTTPError:
+            except (RuntimeError, requests.RequestException):
                 continue
             if probe.status_code == 200 and len(probe.content) > 200:
                 municipality_page = candidate

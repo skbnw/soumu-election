@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "election_type": "sangiin",
+  "kaiji": 23,
+  "election_date": "2013-07-21",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin23/index.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin23/sangiin23_7.html"
+  ],
+  "observed_formats": ["xls", "xlsx", "pdf"],
+  "notes": [
+    "平成25年7月21日執行 参議院議員通常選挙 速報結果",
+    "市区町村別は sangiin23_7.html / sangiin23_7_XX.html（第24回以降の _8 とは異なる）",
+    "衆院と用語が異なる（選挙区／比例代表）。項番は SANGIIN_INDEX_CODES で管理"
+  ]
+}
