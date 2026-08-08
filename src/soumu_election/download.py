@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Download official MIC House election workbooks and convert them to JSON.
+# v1.1.0: --chamber sangiin 対応（参院 index 取得・項番マップ）
+"""Download official MIC election workbooks and convert them to JSON.
 
-The source workbooks are always retained.  Normalized output deliberately keeps
-the labels printed by MIC (Ministry of Internal Affairs and Communications), so
-name correction/identity resolution can be performed later without losing the
-official source representation.
+Supports House (shugiin) and House of Councillors (sangiin) index pages.
+The source workbooks are always retained. Normalized output deliberately keeps
+the labels printed by MIC, so name correction can be performed later.
 """
 
 from __future__ import annotations
@@ -90,6 +90,37 @@ INDEX_CODES = {
     "都道府県別投票総数、有効投票数、無効投票数": "05-03",
 }
 
+# 参院は「選挙区／比例代表」表記。項番は参院indexの見出し順に独自採番。
+SANGIIN_INDEX_CODES = {
+    "党派別男女別新前元別候補者数（比例代表、選挙区）": "01-01",
+    "都道府県別党派別新前元別候補者数（選挙区）": "01-02",
+    "都道府県別有権者数、投票者数、投票率（比例代表）": "02-01",
+    "都道府県別有権者数、投票者数、投票率（比例代表）（比較）": "02-01-cmp",
+    "都道府県別有権者数、投票者数、投票率（選挙区）": "02-02",
+    "都道府県別有権者数、投票者数、投票率（選挙区）（比較）": "02-02-cmp",
+    "党派別男女別新前元別当選人数（比例代表、選挙区）": "03-01",
+    "都道府県別党派別新前元別当選人数（選挙区）": "03-02",
+    "党派別得票数（比例代表）": "03-03",
+    "党派別得票数（選挙区）": "03-04",
+    "都道府県別党派別得票数（比例代表）": "03-05",
+    "都道府県別党派別得票数（選挙区）": "03-06",
+    "都道府県別投票総数、有効投票数、無効投票数（比例代表）": "03-07",
+    "都道府県別投票総数、有効投票数、無効投票数（選挙区）": "03-08",
+    "得票順党派別得票数（比例代表）": "03-09",
+    "党派別名簿登載者別得票数、当選人数（比例代表）": "03-10",
+    "都道府県別党派別名簿登載者別得票数（比例代表）": "03-11",
+    "党派別議席配分表（比例代表）": "03-12",
+    "候補者別得票数（選挙区）": "03-13",
+    "候補者別市区町村別得票数": "03-14",
+    "18歳、19歳投票状況": "03-15",
+    "18歳、19歳投票状況（速報）": "03-15",
+    "年齢別投票状況": "03-16",
+    "年齢別投票者数調": "03-16",
+    "年齢別投票率の状況": "03-16",
+    "比例代表党派別名簿登載者別選挙運動費用収支報告書要旨": "03-17",
+    "管理執行上問題となった事項": "04-01",
+}
+
 
 def clean_text(value: Any) -> str | None:
     if value is None:
@@ -143,7 +174,9 @@ def discover_page(
     *,
     allow_empty: bool = False,
     label_override: str | None = None,
+    index_codes: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
+    codes = index_codes or INDEX_CODES
     response = get(session, page_url)
     # The current and historical MIC pages declare Shift_JIS. requests' guess
     # is not consistently correct, so honor the HTML declaration explicitly.
@@ -171,6 +204,15 @@ def discover_page(
             category = "pr" if "比例" in link_label or ("小選挙区" not in link_label and link_label.endswith("選挙区")) else "smd"
         else:
             category = "pdf" if urlparse(url).path.lower().endswith(".pdf") else "summary"
+        source_code = codes.get(label)
+        if source_code is None:
+            # 党派名だけのリンク（参院 03-11 名簿登載者別など）
+            if page_kind == "summary" and "名簿登載者" in (page_url + label):
+                source_code = codes.get("都道府県別党派別名簿登載者別得票数（比例代表）")
+            for key, code in codes.items():
+                if label.startswith(key) or key in label:
+                    source_code = code
+                    break
         links.append(
             {
                 "category": category,
@@ -179,7 +221,7 @@ def discover_page(
                 "url": url,
                 "source_page": page_url,
                 "page_kind": page_kind,
-                "source_code": "00-00-old" if icon_only_link and link_label.startswith("表紙") else INDEX_CODES.get(label),
+                "source_code": "00-00-old" if icon_only_link and link_label.startswith("表紙") else source_code,
             }
         )
     if not links and not allow_empty:
@@ -187,8 +229,13 @@ def discover_page(
     return links
 
 
-def discover_municipality_pages(session: requests.Session, page_url: str) -> list[dict[str, str]]:
-    direct = discover_page(session, page_url, "municipality_votes", allow_empty=True)
+def discover_municipality_pages(
+    session: requests.Session,
+    page_url: str,
+    *,
+    index_codes: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    direct = discover_page(session, page_url, "municipality_votes", allow_empty=True, index_codes=index_codes)
     if direct:
         return direct
     response = get(session, page_url)
@@ -206,31 +253,57 @@ def discover_municipality_pages(session: requests.Session, page_url: str) -> lis
     for index, (subpage_url, prefecture) in enumerate(subpages):
         if index:
             time.sleep(0.25)
-        links.extend(discover_page(session, subpage_url, "municipality_votes", label_override=prefecture))
+        links.extend(discover_page(
+            session, subpage_url, "municipality_votes",
+            label_override=prefecture, index_codes=index_codes,
+        ))
     return links
 
 
-def discover(session: requests.Session, kaiji: int) -> tuple[list[str], list[dict[str, str]]]:
-    base = f"{BASE_URL}/senkyo/senkyo_s/data/shugiin{kaiji}"
+def discover(
+    session: requests.Session,
+    kaiji: int,
+    *,
+    chamber: str = "shugiin",
+) -> tuple[list[str], list[dict[str, str]]]:
+    if chamber not in {"shugiin", "sangiin"}:
+        raise ValueError(f"unsupported chamber: {chamber}")
+    base = f"{BASE_URL}/senkyo/senkyo_s/data/{chamber}{kaiji}"
     pages = [f"{base}/index.html"]
-    links = discover_page(session, pages[0], "summary")
+    codes = SANGIIN_INDEX_CODES if chamber == "sangiin" else INDEX_CODES
+    links = discover_page(session, pages[0], "summary", index_codes=codes)
+
     municipality_links: list[dict[str, str]] = []
-    if kaiji >= 45:
-        municipality_page = f"{base}/shikuchouson.html"
+    municipality_page = f"{base}/shikuchouson.html"
+    if chamber == "shugiin" and kaiji >= 45:
         pages.append(municipality_page)
         municipality_links = discover_municipality_pages(session, municipality_page)
+    elif chamber == "sangiin":
+        try:
+            muni = discover_page(
+                session, municipality_page, "municipality_votes",
+                allow_empty=True, index_codes=codes,
+            )
+        except RuntimeError:
+            muni = []
+        if muni:
+            pages.append(municipality_page)
+            municipality_links = muni
+
     counters = {"smd": 0, "pr": 0}
     for item in municipality_links:
         counters[item["category"]] += 1
         item["source_code"] = f"03-14-{item['category']}-{counters[item['category']]:02d}"
     links.extend(municipality_links)
+
     for item in links:
-        if not item.get("source_code") and "年齢別投票状況" in item["label"]:
+        if not item.get("source_code") and "年齢別" in item["label"]:
             item["source_code"] = "03-16"
         if item["label"].startswith("まとめて表示する"):
             item["source_code"] = "99-00"
-        if item["label"].startswith(f"{kaiji}衆結果調全体版"):
+        if item["label"].startswith(f"{kaiji}衆結果調全体版") or "結果調全体版" in item["label"]:
             item["source_code"] = "99-00"
+        item["chamber"] = chamber
     unique = {item["url"]: item for item in links}
     return pages, list(unique.values())
 
@@ -582,19 +655,23 @@ def find_project_root(script: Path) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="総務省の衆院選市区町村別結果を取得してJSON化")
-    parser.add_argument("--kaiji", type=int, required=True, help="選挙回次（例: 51）")
-    parser.add_argument("--output", type=Path, help="出力先（既定: data/shugiin<回次>）")
+    parser = argparse.ArgumentParser(description="総務省の選挙結果を取得してJSON化（衆院/参院）")
+    parser.add_argument("--kaiji", type=int, required=True, help="選挙回次（例: 衆51 / 参27）")
+    parser.add_argument(
+        "--chamber", choices=("shugiin", "sangiin"), default="shugiin",
+        help="議院（shugiin=衆院, sangiin=参院）",
+    )
+    parser.add_argument("--output", type=Path, help="出力先（既定: data/<chamber><回次>）")
     parser.add_argument("--force", action="store_true", help="既存のExcelを再取得")
     args = parser.parse_args()
 
     project_root = find_project_root(Path(__file__).resolve())
-    output = args.output or project_root / "data" / f"shugiin{args.kaiji}"
+    output = args.output or project_root / "data" / f"{args.chamber}{args.kaiji}"
     raw_dir = output / "raw"
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
 
-    source_pages, sources = discover(session, args.kaiji)
+    source_pages, sources = discover(session, args.kaiji, chamber=args.chamber)
     smd_records: list[dict[str, Any]] = []
     pr_records: list[dict[str, Any]] = []
     manifest_sources: list[dict[str, Any]] = []
@@ -609,15 +686,18 @@ def main() -> int:
             if path.suffix.lower() == ".xls"
             else workbook_to_raw_json(path, source, args.kaiji)
         )
+        raw_json["chamber"] = args.chamber
         raw_json_path = raw_json_dir / f"{path.stem}.json"
         write_json(raw_json_path, raw_json)
         records: list[dict[str, Any]] = []
-        if source["category"] == "smd":
-            records = parse_smd(path, source, args.kaiji)
-            smd_records.extend(records)
-        elif source["category"] == "pr":
-            records = parse_pr(path, source, args.kaiji)
-            pr_records.extend(records)
+        # 参院は市区町村パーサ未対応のため semantic 変換はスキップ（raw のみ）
+        if args.chamber == "shugiin":
+            if source["category"] == "smd":
+                records = parse_smd(path, source, args.kaiji)
+                smd_records.extend(records)
+            elif source["category"] == "pr":
+                records = parse_pr(path, source, args.kaiji)
+                pr_records.extend(records)
         manifest_sources.append({
             **source,
             "file": str(path.relative_to(output)),
@@ -637,14 +717,16 @@ def main() -> int:
         )
 
     errors: list[str] = []
-    if any(source["category"] == "smd" for source in sources):
-        errors.extend(validate(smd_records, "smd"))
-    if any(source["category"] == "pr" for source in sources):
-        errors.extend(validate(pr_records, "pr"))
+    if args.chamber == "shugiin":
+        if any(source["category"] == "smd" for source in sources):
+            errors.extend(validate(smd_records, "smd"))
+        if any(source["category"] == "pr" for source in sources):
+            errors.extend(validate(pr_records, "pr"))
     write_json(output / "smd_votes.json", smd_records)
     write_json(output / "pr_votes.json", pr_records)
     manifest = {
         "schema_version": "1.0",
+        "election_type": args.chamber,
         "election_kaiji": args.kaiji,
         "source_pages": source_pages,
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
@@ -668,6 +750,7 @@ def main() -> int:
             "excel": "セル座標・結合セルを保持してraw JSON化し、対応済み表のみsemantic変換する",
             "pdf": "原本とページ別抽出テキストを保持するが、表構造を検証するまでsemantic変換しない",
             "raw_only_is_not_normalized": True,
+            "sangiin_semantic": "参院は当面 raw/raw_json まで。正規化パーサは後続",
         },
         "validation": {"ok": not errors, "errors": errors},
         "unavailable_sources": (
@@ -681,8 +764,12 @@ def main() -> int:
         ) + ([] if any(item["category"] in {"smd", "pr"} for item in sources) else [{
             "source_code": "03-14",
             "dataset": "市区町村別得票数",
-            "status": "not_published",
-            "reason": "総務省indexに市区町村別ページまたは取得可能なファイルへのリンクなし",
+            "status": "not_published" if args.chamber == "shugiin" else "pending_or_not_on_shikuchouson",
+            "reason": (
+                "総務省indexに市区町村別ページまたは取得可能なファイルへのリンクなし"
+                if args.chamber == "shugiin"
+                else "参院の市区町村別は別ページ構成の可能性あり。index上のリンク有無を要確認"
+            ),
             "source_page": source_pages[0],
         }]),
         "sources": manifest_sources,

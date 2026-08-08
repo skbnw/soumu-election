@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "election_type": "sangiin",
+  "kaiji": 27,
+  "election_date": "2025-07-20",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin27/index.html"
+  ],
+  "observed_formats": ["xlsx", "pdf"],
+  "notes": [
+    "令和7年7月20日執行 参議院議員通常選挙 速報結果",
+    "衆院と用語が異なる（選挙区／比例代表）。項番は SANGIIN_INDEX_CODES で管理",
+    "当面は raw / raw_json まで。正規化パーサと Pages 検索は後続",
+    "候補者別市区町村別得票数の掲載形態は要確認"
+  ]
+}

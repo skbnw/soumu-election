@@ -18,6 +18,10 @@ data/shugiin*/raw_json/
 data/shugiin*/normalized/
 data/shugiin*/smd_votes.json
 data/shugiin*/pr_votes.json
+data/sangiin*/raw_json/
+data/sangiin*/normalized/
+data/sangiin*/smd_votes.json
+data/sangiin*/pr_votes.json
 data/warehouse/*.duckdb
 !data/warehouse/parquet/
 !data/warehouse/parquet/*.parquet

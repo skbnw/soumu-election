@@ -3,16 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="総務省の衆議院議員総選挙結果を、小選挙区・比例代表・投票有権者・国民審査ごとに検索できるデータベースです。">
-  <title>衆院選データ横断検索β</title>
+  <meta name="description" content="総務省の衆議院・参議院選挙結果を横断検索できるデータベース（β）です。">
+  <title>総務省選挙データ横断検索β</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="./styles.css?v=20260808e">
+  <link rel="stylesheet" href="./styles.css?v=20260808g">
 </head>
 <body>
   <header class="masthead">
-    <a class="brand" href="./" aria-label="衆院選データ横断検索β ホーム">
-      <span class="brand-mark" aria-hidden="true">衆</span>
-      <span>衆院選データ横断検索β</span>
+    <a class="brand" href="./" aria-label="総務省選挙データ横断検索β ホーム">
+      <span class="brand-mark" aria-hidden="true">選</span>
+      <span>総務省選挙データ横断検索β</span>
     </a>
     <div class="masthead-right">
       <time id="updated-at" class="updated-at" datetime="2026-08-08T10:40:05.614736+00:00">更新 2026-08-08 19:40:05</time>
@@ -26,99 +26,115 @@
         <div id="status" class="status" role="status"><span class="pulse"></span>データベースを準備中</div>
       </div>
 
-      <div class="tabs" role="tablist" aria-label="検索の種類">
-        <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="smd">小選挙区</button>
-        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="pr">比例代表</button>
-        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="turnout">投票・有権者</button>
-        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="judicial">国民審査</button>
-        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="muni">市区町村</button>
-      </div>
-      <p id="tab-note" class="tab-note"></p>
-
-      <form id="filters" class="filters" data-tab="smd">
-        <label>選挙回
-          <select id="election" disabled><option value="">すべて</option></select>
-        </label>
-        <label data-show="pr">集計単位
-          <select id="geo-level" disabled>
-            <option value="prefecture">都道府県</option>
-            <option value="block">ブロック</option>
-            <option value="national">全国</option>
-          </select>
-        </label>
-        <label data-show="pr" id="pr-block-label">比例ブロック
-          <select id="pr-block" disabled><option value="">すべて</option></select>
-        </label>
-        <label data-show="turnout">選挙区分
-          <select id="contest" disabled>
-            <option value="">すべて</option>
-            <option value="smd">小選挙区</option>
-            <option value="pr">比例代表</option>
-            <option value="judicial_review">国民審査</option>
-          </select>
-        </label>
-        <label data-show="turnout">集計範囲
-          <select id="scope" disabled>
-            <option value="all">全体</option>
-            <option value="overseas">在外</option>
-            <option value="">すべて</option>
-          </select>
-        </label>
-        <label data-show="smd muni pr turnout judicial" id="prefecture-label">都道府県
-          <select id="prefecture" disabled><option value="">すべて</option></select>
-        </label>
-        <label data-show="smd muni">選挙区
-          <select id="district" disabled><option value="">すべて</option></select>
-        </label>
-        <label data-show="muni">市区町村
-          <select id="municipality" disabled><option value="">すべて</option></select>
-        </label>
-        <label data-show="pr" id="pr-party-label">政党
-          <select id="pr-party" disabled><option value="">すべて</option></select>
-        </label>
-        <label data-show="turnout judicial">指標
-          <select id="metric" disabled></select>
-        </label>
-        <label class="search-label" data-show="smd muni judicial">
-          <span id="keyword-label">候補者名</span>
-          <div class="search-wrap"><input id="keyword" type="search" placeholder="例：道下大樹" disabled></div>
-        </label>
-        <button id="search" type="submit" disabled>検索する</button>
-      </form>
-
-      <div class="summary-grid" aria-live="polite">
-        <article><span>該当レコード</span><strong id="match-count">—</strong></article>
-        <article class="summary-limit">
-          <span>表示件数</span>
-          <div class="limit-row">
-            <strong id="shown-count">—</strong>
-            <label class="limit-label">1ページ
-              <select id="result-limit" disabled>
-                <option value="50">50</option>
-                <option value="100" selected>100</option>
-                <option value="200">200</option>
-                <option value="500">500</option>
-              </select>
-            </label>
-          </div>
-        </article>
+      <div class="chamber-tabs" role="tablist" aria-label="議院">
+        <button type="button" class="chamber is-active" role="tab" aria-selected="true" data-chamber="shugiin">衆院選</button>
+        <button type="button" class="chamber" role="tab" aria-selected="false" data-chamber="sangiin">参院選</button>
       </div>
 
-      <div class="table-bar">
-        <p id="result-label">検索条件を選択してください</p>
-        <button id="download" class="text-button" type="button" disabled>CSVを保存 ↓</button>
+      <div id="chamber-panel-shugiin" class="chamber-panel">
+        <div class="tabs" role="tablist" aria-label="検索の種類">
+          <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="smd">小選挙区</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="pr">比例代表</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="turnout">投票・有権者</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="judicial">国民審査</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="muni">市区町村</button>
+        </div>
+        <p id="tab-note" class="tab-note"></p>
+
+        <form id="filters" class="filters" data-tab="smd">
+          <label>選挙
+            <select id="election" disabled><option value="">すべて</option></select>
+          </label>
+          <label data-show="pr">集計単位
+            <select id="geo-level" disabled>
+              <option value="prefecture">都道府県</option>
+              <option value="block">ブロック</option>
+              <option value="national">全国</option>
+            </select>
+          </label>
+          <label data-show="pr" id="pr-block-label">比例ブロック
+            <select id="pr-block" disabled><option value="">すべて</option></select>
+          </label>
+          <label data-show="turnout">選挙区分
+            <select id="contest" disabled>
+              <option value="">すべて</option>
+              <option value="smd">小選挙区</option>
+              <option value="pr">比例代表</option>
+              <option value="judicial_review">国民審査</option>
+            </select>
+          </label>
+          <label data-show="turnout">集計範囲
+            <select id="scope" disabled>
+              <option value="all">全体</option>
+              <option value="overseas">在外</option>
+              <option value="">すべて</option>
+            </select>
+          </label>
+          <label data-show="smd muni pr turnout judicial" id="prefecture-label">都道府県
+            <select id="prefecture" disabled><option value="">すべて</option></select>
+          </label>
+          <label data-show="smd muni">選挙区
+            <select id="district" disabled><option value="">すべて</option></select>
+          </label>
+          <label data-show="muni">市区町村
+            <select id="municipality" disabled><option value="">すべて</option></select>
+          </label>
+          <label data-show="pr" id="pr-party-label">政党
+            <select id="pr-party" disabled><option value="">すべて</option></select>
+          </label>
+          <label data-show="turnout judicial">指標
+            <select id="metric" disabled></select>
+          </label>
+          <label class="search-label" data-show="smd muni judicial">
+            <span id="keyword-label">候補者名</span>
+            <div class="search-wrap"><input id="keyword" type="search" placeholder="例：道下大樹" disabled></div>
+          </label>
+          <button id="search" type="submit" disabled>検索する</button>
+        </form>
+
+        <div class="summary-grid" aria-live="polite">
+          <article><span>該当レコード</span><strong id="match-count">—</strong></article>
+          <article class="summary-limit">
+            <span>表示件数</span>
+            <div class="limit-row">
+              <strong id="shown-count">—</strong>
+              <label class="limit-label">1ページ
+                <select id="result-limit" disabled>
+                  <option value="50">50</option>
+                  <option value="100" selected>100</option>
+                  <option value="200">200</option>
+                  <option value="500">500</option>
+                </select>
+              </label>
+            </div>
+          </article>
+        </div>
+
+        <div class="table-bar">
+          <p id="result-label">検索条件を選択してください</p>
+          <button id="download" class="text-button" type="button" disabled>CSVを保存 ↓</button>
+        </div>
+        <div class="table-shell">
+          <table>
+            <thead><tr id="result-head"></tr></thead>
+            <tbody id="results"><tr><td colspan="8" class="empty">データを読み込んでいます…</td></tr></tbody>
+          </table>
+        </div>
+        <nav id="pager" class="pager" aria-label="結果のページ" hidden>
+          <button type="button" id="page-prev" class="pager-btn" disabled>前へ</button>
+          <span id="page-status">1 / 1 ページ</span>
+          <button type="button" id="page-next" class="pager-btn" disabled>次へ</button>
+        </nav>
       </div>
-      <div class="table-shell">
-        <table>
-          <thead><tr id="result-head"></tr></thead>
-          <tbody id="results"><tr><td colspan="8" class="empty">データを読み込んでいます…</td></tr></tbody>
-        </table>
+
+      <div id="chamber-panel-sangiin" class="chamber-panel" hidden>
+        <div class="under-construction">
+          <p class="section-number">SANGIIN</p>
+          <h2>参院選（建設中）</h2>
+          <p>第27回（2025-07-20 執行）の総務省公開資料の取得を開始しています。検索UIへの接続は、正規化パイプラインの整備後に公開します。</p>
+          <p class="under-construction-meta">出典: <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin27/index.html" target="_blank" rel="noreferrer">参議院議員通常選挙 第27回 速報結果</a></p>
+        </div>
       </div>
-      <nav id="pager" class="pager" aria-label="結果のページ" hidden>
-        <button type="button" id="page-prev" class="pager-btn" disabled>前へ</button>
-        <span id="page-status">1 / 1 ページ</span>
-        <button type="button" id="page-next" class="pager-btn" disabled>次へ</button>
-      </nav>
     </section>
 
     <section class="about">
@@ -126,12 +142,13 @@
       <div class="about-copy">
         <p>検索結果は選挙回・地域・候補者・政党などの条件で絞り込み、表示中の行をCSVとして保存できます。分析用データには総務省資料への出典座標も保持していますが、画面の一覧には出典列を出していません。</p>
         <p>人名は漢字表記を基本に表示し、読み仮名は検索時にも使えます。市区町村タブでは小選挙区・比例の市区町村別得票に加え、都道府県単位の有権者・投票と国民審査を参考表示します。</p>
+        <p>衆院選に加え、参院選データの取込を同一リポジトリで進めています。参院側の検索は準備中です。</p>
         <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ず総務省の原資料も確認してください。</p>
       </div>
     </section>
   </main>
 
   <footer><span>DATA FROM MINISTRY OF INTERNAL AFFAIRS AND COMMUNICATIONS</span><span>Built with DuckDB-Wasm</span></footer>
-  <script type="module" src="./app.js?v=20260808e"></script>
+  <script type="module" src="./app.js?v=20260808g"></script>
 </body>
 </html>

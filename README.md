@@ -1,18 +1,40 @@
-# 総務省・衆議院選挙結果のJSON化
+# 総務省選挙データ横断検索（衆院・参院）
+
+参議院への拡張は同一リポジトリで進めています。詳細は [docs/DATASET_PLAN.md](docs/DATASET_PLAN.md) の「9. 参議院への拡張方針」を参照してください。
+
+**一般利用者向けの標準手順**は [docs/PIPELINE.md](docs/PIPELINE.md) です。`src/run_pipeline.py` で取得→正規化→warehouse→市区町村まで通せます。
 
 ## ブラウザ版
 
-[衆院選データ横断検索β](https://skbnw.github.io/soumu-election/) では、第44〜51回の正規化済みデータを選挙回・都道府県・指標・候補者名等で横断検索できます。DuckDB-Wasmが公開用Parquetをブラウザ内で検索するため、サーバーへ検索条件を送信しません。表示結果はCSVとして保存できます。
+[総務省選挙データ横断検索β](https://skbnw.github.io/soumu-election/) では、衆院選（第44〜51回）を横断検索できます。参院選タブは建設中で、第27回の取得を開始しています。DuckDB-Wasmが公開用Parquetをブラウザ内で検索するため、サーバーへ検索条件を送信しません。表示結果はCSVとして保存できます。表示の選挙表記は `2026-衆51回` 形式です。
 
 サイトは `web/`、公開処理は `.github/workflows/pages.yml` にあります。`data/warehouse/parquet/` を更新してmainブランチへ反映すると、GitHub Pagesも自動更新されます。
 
 総務省の選挙結果indexと「候補者別 市区町村別得票数」ページから全公式Excelを取得します。全セルを汎用raw JSONへ変換するとともに、小選挙区と比例代表の市区町村別得票を分析しやすいJSONへ変換します。Excel原本も保存し、各JSONレコードには出典URL、ファイル名、シート名、Excel行番号を残します。
 
-## 実行
+## 実行（標準パイプライン）
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 既存 data/shugiin* がある場合（再取得なし）
+.\.venv\Scripts\python.exe .\src\run_pipeline.py `
+  --project-root . `
+  --steps normalize,warehouse,municipality
+
+# 第51回だけ総務省から取得して通す例
+.\.venv\Scripts\python.exe .\src\run_pipeline.py `
+  --project-root . `
+  --kaiji 51 `
+  --steps download,normalize,warehouse,municipality
+```
+
+詳細・ステップ分割・成果物の見方は [docs/PIPELINE.md](docs/PIPELINE.md) を参照してください。`code/` 配下の probe 類は調査用です（[code/README.md](code/README.md)）。
+
+### 個別ステップ（従来CLI）
+
+```powershell
 .\.venv\Scripts\python.exe .\src\soumu_shugiin_to_json.py --kaiji 51
 ```
 
