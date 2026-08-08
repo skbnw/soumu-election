@@ -1,6 +1,8 @@
 /*
  * 総務省選挙データ横断検索β — DuckDB-Wasm 検索
- * v2.9.1
+ * v2.9.2
+ * - 参院第25回（2019）を接続
+ * - 市区町村名の選挙区接尾辞を統一（全角括弧＋半角数字）
  * - CSV保存を廃止（画面閲覧のみ）
  * - 参院第26回＋市区町村別得票を接続（選挙区／比例政党／名簿候補）
  * - 参院比例「名簿候補」個人名得票、件数表示を目立たなく
@@ -191,6 +193,7 @@ const ELECTION_YEARS = {
     48: 2017, 49: 2021, 50: 2024, 51: 2026
   },
   sangiin: {
+    25: 2019,
     26: 2022,
     27: 2025
   }
@@ -606,7 +609,7 @@ function applyTab(tabId, { search = true } = {}) {
   } else if (tabId === 'smd' && state.chamber === 'sangiin') {
     els.tabNote.textContent = '参院の県区（都道府県・合区）候補者得票です。定数は1人区・2人区などで絞り込めます。';
   } else if (tabId === 'muni' && state.chamber === 'sangiin') {
-    els.tabNote.textContent = '参院第26回の市区町村別得票です。選挙区候補者・比例政党・比例名簿候補者を横断検索できます。';
+    els.tabNote.textContent = '参院第25・26回の市区町村別得票です。選挙区候補者・比例政党・比例名簿候補者を横断検索できます。';
   } else {
     els.tabNote.textContent = tab.note;
   }

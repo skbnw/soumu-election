@@ -1,3 +1,4 @@
+# v1.1.2: 市区町村名の選挙区接尾辞を統一（全角/半角括弧・数字）
 # v1.1.1: pr_party/pr_cand ファイル名のラベル抽出を修正（都道府県コード欠け）
 # v1.1.0: 参院（sangiin）市区町村対応（district / pr_party / pr_cand）、election_id・chamber 列
 # v1.0.0: 市区町村別得票 parquet 生成（code/04 からパッケージへ移行）
@@ -23,6 +24,11 @@ from soumu_election.download import (
 )
 
 DISTRICT_RE = re.compile(r"第(\d+)区")
+# 例: 札幌市西区（１区） / さいたま市見沼区(1区) / 南九州市(２区） / 札幌市西区第（４区）
+DISTRICT_SUFFIX_RE = re.compile(
+    r"(?:第)?[（(]\s*([0-9０-９]+)\s*区\s*[）)]\s*$"
+)
+ZENKAKU_DIGIT_TRANS = str.maketrans("０１２３４５６７８９", "0123456789")
 PREFECTURE_CODES = {
     name: f"{index:02d}" for index, name in enumerate((
         "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
@@ -39,6 +45,25 @@ LABEL_SUFFIXES = ("_選挙区", "_合同選挙区", "_政党別", "_候補者別
 def compact_name(value: object) -> str | None:
     text = re.sub(r"[\s\u3000]+", "", str(value or ""))
     return text or None
+
+
+def normalize_municipality_name(value: object) -> str | None:
+    """市区町村ラベルを統一する。
+
+    選挙区接尾辞は全角括弧＋半角数字に揃える（例: 札幌市西区（1区））。
+    """
+    text = compact_name(value)
+    if not text:
+        return None
+    match = DISTRICT_SUFFIX_RE.search(text)
+    if not match:
+        return text
+    digits = match.group(1).translate(ZENKAKU_DIGIT_TRANS)
+    base = text[: match.start()]
+    # 「西区第」のように余分な「第」が残る場合を除去
+    if base.endswith("第"):
+        base = base[:-1]
+    return f"{base}（{digits}区）"
 
 
 def source_code_from_name(name: str, prefix: str) -> str:
@@ -125,7 +150,7 @@ def parse_smd_kaiji(root: Path, kaiji: int) -> list[dict]:
                 "prefecture": item["prefecture"],
                 "prefecture_code": PREFECTURE_CODES.get(item["prefecture"]),
                 "district_number": district_number(item.get("district")),
-                "municipality": compact_name(item.get("reporting_unit")),
+                "municipality": normalize_municipality_name(item.get("reporting_unit")),
                 "subject": compact_name(item.get("candidate")),
                 "candidate": compact_name(item.get("candidate")),
                 "party": compact_name(item.get("party")),
@@ -186,7 +211,7 @@ def parse_pr_kaiji(root: Path, kaiji: int) -> list[dict]:
                 "prefecture": prefecture,
                 "prefecture_code": PREFECTURE_CODES.get(prefecture) if prefecture else None,
                 "district_number": None,
-                "municipality": compact_name(item.get("reporting_unit")),
+                "municipality": normalize_municipality_name(item.get("reporting_unit")),
                 "pr_block": item.get("block"),
                 "subject": compact_name(item.get("party")),
                 "candidate": None,
@@ -221,7 +246,7 @@ def parse_sangiin_muni_district(path: Path, source: dict[str, str], kaiji: int) 
             "prefecture": prefecture,
             "prefecture_code": prefecture_code_of(prefecture),
             "district_number": None,
-            "municipality": compact_name(item.get("reporting_unit")),
+            "municipality": normalize_municipality_name(item.get("reporting_unit")),
             "subject": compact_name(item.get("candidate")),
             "candidate": compact_name(item.get("candidate")),
             "party": compact_name(item.get("party")),
@@ -295,7 +320,7 @@ def parse_sangiin_muni_pr_party(path: Path, source: dict[str, str], kaiji: int) 
                     "prefecture": prefecture,
                     "prefecture_code": prefecture_code_of(prefecture),
                     "district_number": None,
-                    "municipality": compact_name(municipality),
+                    "municipality": normalize_municipality_name(municipality),
                     "pr_block": None,
                     "subject": compact_name(party),
                     "candidate": None,
@@ -360,7 +385,7 @@ def parse_sangiin_muni_pr_cand(path: Path, source: dict[str, str], kaiji: int) -
                     "prefecture": prefecture,
                     "prefecture_code": prefecture_code_of(prefecture),
                     "district_number": None,
-                    "municipality": compact_name(municipality),
+                    "municipality": normalize_municipality_name(municipality),
                     "pr_block": None,
                     "subject": compact_name(cand),
                     "candidate": compact_name(cand),
