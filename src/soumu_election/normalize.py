@@ -1619,8 +1619,11 @@ def main() -> int:
         doc["source_code"] = code
         chamber = doc.get("chamber") or doc.get("election_type") or "shugiin"
         if chamber == "sangiin":
-            from soumu_election.normalize_sangiin import SANGIIN_PARSERS
-            selected = SANGIIN_PARSERS.get(code)
+            from soumu_election.normalize_sangiin import SANGIIN_PARSERS, parse_sangiin_pr_list_by_prefecture
+            if code.startswith("unclassified"):
+                selected = parse_sangiin_pr_list_by_prefecture
+            else:
+                selected = SANGIIN_PARSERS.get(code)
         else:
             selected = PARSERS.get(code)
         before = len(facts)

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-08-08T12:57:10.349226+00:00",
+  "generated_at": "2026-08-08T13:38:21.436023+00:00",
   "election_kaiji": [
     44,
     45,
@@ -13,10 +13,10 @@
   ],
   "database": "soumu_election.duckdb",
   "counts": {
-    "elections": 9,
-    "source_documents": 209,
-    "normalization_coverage": 233,
-    "facts": 121081,
+    "elections": 10,
+    "source_documents": 252,
+    "normalization_coverage": 412,
+    "facts": 144268,
     "validation_results": 8
   },
   "validation": {

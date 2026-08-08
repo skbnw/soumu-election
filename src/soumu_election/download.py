@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# v1.2.1: 合同選挙区を district 分類（衆院「○○選挙区」比例と区別）
+# v1.2.0: 参院市区町村を sangiinN_8.html ツリーから取得（shikuchouson フォールバック）
 # v1.1.0: --chamber sangiin 対応（参院 index 取得・項番マップ）
 """Download official MIC election workbooks and convert them to JSON.
 
@@ -15,6 +17,7 @@ import json
 import re
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -201,7 +204,10 @@ def discover_page(
         link_label = re.sub(r"（別ウィンドウ）$", "", link_label).strip()
         label = label_override or link_label
         if page_kind == "municipality_votes":
-            category = "pr" if "比例" in link_label or ("小選挙区" not in link_label and link_label.endswith("選挙区")) else "smd"
+            category = classify_municipality_category(link_label)
+            if label_override:
+                # 都道府県名 + リンク種別（選挙区/比例/政党別/候補者別）
+                label = f"{label_override}_{link_label}" if link_label and link_label != label_override else label_override
         else:
             category = "pdf" if urlparse(url).path.lower().endswith(".pdf") else "summary"
         source_code = codes.get(label)
@@ -229,6 +235,30 @@ def discover_page(
     return links
 
 
+def classify_municipality_category(link_label: str) -> str:
+    """市区町村 Excel の種別（衆院 smd/pr、参院 district/pr-party/pr-cand）。"""
+    text = (link_label or "").strip()
+    if "比例" in text:
+        if "政党" in text or "党派" in text:
+            return "pr-party"
+        if "候補" in text:
+            return "pr-cand"
+        return "pr"
+    if "小選挙区" in text:
+        return "smd"
+    # 参院: 「選挙区」「合同選挙区」
+    if text == "選挙区" or "合同選挙区" in text or text.startswith("選挙区"):
+        return "district"
+    if "政党" in text or "党派" in text:
+        return "pr-party"
+    if "候補" in text:
+        return "pr-cand"
+    # 衆院: 「○○選挙区」は比例ブロック、それ以外の都道府県リンクは小選挙区
+    if text.endswith("選挙区"):
+        return "pr"
+    return "smd"
+
+
 def discover_municipality_pages(
     session: requests.Session,
     page_url: str,
@@ -244,7 +274,8 @@ def discover_municipality_pages(
     subpages: list[tuple[str, str]] = []
     for anchor in soup.find_all("a", href=True):
         href = anchor["href"]
-        if not re.search(r"shikuchouson_\d+\.html$", href):
+        # 衆院: shikuchouson_XX.html / 参院: sangiinN_8_XX.html
+        if not re.search(r"(?:shikuchouson_\d+|sangiin\d+_8_\d+)\.html$", href):
             continue
         subpages.append((urljoin(page_url, href), clean_text(anchor.get_text(" ", strip=True)) or "unknown"))
     if not subpages:
@@ -274,23 +305,30 @@ def discover(
     links = discover_page(session, pages[0], "summary", index_codes=codes)
 
     municipality_links: list[dict[str, str]] = []
-    municipality_page = f"{base}/shikuchouson.html"
     if chamber == "shugiin" and kaiji >= 45:
+        municipality_page = f"{base}/shikuchouson.html"
         pages.append(municipality_page)
         municipality_links = discover_municipality_pages(session, municipality_page)
     elif chamber == "sangiin":
-        try:
-            muni = discover_page(
-                session, municipality_page, "municipality_votes",
-                allow_empty=True, index_codes=codes,
-            )
-        except RuntimeError:
-            muni = []
-        if muni:
+        # 参院26回以降: sangiinN_8.html → sangiinN_8_XX.html
+        tree_page = f"{base}/{chamber}{kaiji}_8.html"
+        legacy_page = f"{base}/shikuchouson.html"
+        municipality_page = None
+        for candidate in (tree_page, legacy_page):
+            try:
+                probe = get(session, candidate)
+            except requests.HTTPError:
+                continue
+            if probe.status_code == 200 and len(probe.content) > 200:
+                municipality_page = candidate
+                break
+        if municipality_page:
             pages.append(municipality_page)
-            municipality_links = muni
+            municipality_links = discover_municipality_pages(
+                session, municipality_page, index_codes=codes,
+            )
 
-    counters = {"smd": 0, "pr": 0}
+    counters: dict[str, int] = defaultdict(int)
     for item in municipality_links:
         counters[item["category"]] += 1
         item["source_code"] = f"03-14-{item['category']}-{counters[item['category']]:02d}"
@@ -538,7 +576,7 @@ def parse_smd(path: Path, source: dict[str, str], kaiji: int) -> list[dict[str, 
     for sheet_name, table in workbook_tables(path):
         try:
             candidate_row = find_row(table, "候補者名")
-            party_row = find_row_any(table[candidate_row:], ("党派名", "政党名")) + candidate_row
+            party_row = find_row_any(table[candidate_row:], ("党派名", "政党名", "政党等名")) + candidate_row
         except ValueError:
             continue
         candidates: list[tuple[int, str, str | None]] = []

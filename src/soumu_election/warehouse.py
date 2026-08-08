@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# v1.1.1: web/data/facts.parquet も同期コピー
 # v1.1.0: --sangiin-kaiji 対応、election_id={chamber}-{kaiji}、web meta に election_ids を出力
 """Build the cross-election DuckDB and Parquet dataset from normalized JSON."""
 
@@ -233,6 +234,10 @@ def main() -> int:
             "election_ids": election_ids,
             "facts": counts.get("facts"),
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        facts_parquet = parquet / "facts.parquet"
+        web_facts = web_meta.parent / "facts.parquet"
+        if facts_parquet.exists():
+            web_facts.write_bytes(facts_parquet.read_bytes())
     con.close()
     facts_ndjson.unlink(missing_ok=True)
     print(json.dumps(manifest, ensure_ascii=False))

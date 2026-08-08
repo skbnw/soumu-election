@@ -1,3 +1,5 @@
+# v1.3.0: unclassified（03-11相当）都道府県×名簿候補者得票を追加
+# v1.2.0: 03-13 県区の定数（1人区等）を district_number に保存
 # v1.1.0: 03-05比例都道府県党派、03-09順位、03-10名簿、03-13選挙区候補者を追加
 # v1.0.0: 参院（sangiin）専用正規化パーサ。衆院 PARSERS とは項番の意味が衝突するため分離。
 """House of Councillors (sangiin) semantic parsers."""
@@ -9,7 +11,8 @@ from typing import Any
 # Reuse helpers from normalize without circular import at module load:
 # callers pass already-imported callables / we import inside functions.
 
-_PREF_HEADER = re.compile(r"^(.+?)\(定数")
+# 例: 北海道(定数3名) / 東京都(定数6(1)名) / 鳥取県・島根県(定数1名)
+_PREF_HEADER = re.compile(r"^(.+?)\(定数(\d+)(?:\((\d+)\))?名\)")
 _STATUS_MAP = {"新": "new", "現": "incumbent", "前": "incumbent", "元": "former"}
 
 
@@ -369,7 +372,7 @@ def parse_sangiin_pr_list_candidates(doc: dict[str, Any], sheet: dict[str, Any],
 
 
 def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
-    """03-13 候補者別得票数（選挙区）。左右独立パネル、都道府県ヘッダは各パネルで保持。"""
+    """03-13 候補者別得票数（県区）。左右独立パネル。定数は district_number に格納（1人区=1）。"""
     from soumu_election.normalize import base, candidate_name, compact, number
 
     if not table:
@@ -385,8 +388,15 @@ def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any]
         "name": 1, "age": 2, "party": 3, "status": 4, "occupation": 5, "votes": 6,
     }
 
-    prefecture_by_panel = {start: None for start in starts}
+    # panel -> (prefecture, seats, byelection_seats|None)
+    district_by_panel: dict[int, tuple[str, int, int | None]] = {}
     output: list[dict[str, Any]] = []
+
+    def set_district(start: int, prefecture: str, seats: int, byelection: int | None) -> None:
+        district_by_panel[start] = (prefecture, seats, byelection)
+        for other in starts:
+            if other not in district_by_panel:
+                district_by_panel[other] = (prefecture, seats, byelection)
 
     for row_index in range(header_index + 1, len(table)):
         row = table[row_index]
@@ -394,21 +404,23 @@ def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any]
             for probe_col in (start, start + 1):
                 text = compact(row[probe_col] if probe_col < len(row) else None)
                 matched = _PREF_HEADER.match(text) if text else None
-                if matched and ("都" in matched.group(1) or "道" in matched.group(1)
-                                or "府" in matched.group(1) or "県" in matched.group(1)):
-                    prefecture_by_panel[start] = matched.group(1)
-                    # 未設定パネルへ初期都道府県を伝播（冒頭の右パネル欠落対策）
-                    for other in starts:
-                        if prefecture_by_panel[other] is None:
-                            prefecture_by_panel[other] = matched.group(1)
-                    break
+                if not matched:
+                    continue
+                prefecture = matched.group(1)
+                if not ("都" in prefecture or "道" in prefecture or "府" in prefecture or "県" in prefecture):
+                    continue
+                seats = int(matched.group(2))
+                byelection = int(matched.group(3)) if matched.group(3) else None
+                set_district(start, prefecture, seats, byelection)
+                break
 
             label = compact(row[start] if start < len(row) else None)
             if label not in {"当", "落"}:
                 continue
-            prefecture = prefecture_by_panel.get(start)
-            if not prefecture:
+            current = district_by_panel.get(start)
+            if not current:
                 continue
+            prefecture, seats, byelection = current
 
             name_col = start + field_offsets["name"]
             chunks = [str(row[name_col] if name_col < len(row) else "")]
@@ -435,6 +447,8 @@ def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any]
             fact.update({
                 "contest": "district",
                 "prefecture": prefecture,
+                # 参院県区の定数（1人区=1, 3人区=3）。衆院の「第N区」とは意味が異なる。
+                "district_number": seats,
                 "candidate": name,
                 "candidate_raw": raw_name,
                 "age": number(row[start + field_offsets["age"]] if start + field_offsets["age"] < len(row) else None),
@@ -446,7 +460,110 @@ def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any]
                 "value": votes,
                 "unit": "votes",
             })
+            if byelection:
+                fact["row_variant"] = f"byelection_seats:{byelection}"
             output.append(fact)
+    return _attach_chamber(output)
+
+
+def _party_from_sangiin_doc(doc: dict[str, Any], table: list[list[Any]]) -> str:
+    from soumu_election.normalize import compact
+
+    for row in table[:8]:
+        label = compact(row[0] if row else None)
+        if label.startswith("政党等の名称"):
+            return label.removeprefix("政党等の名称")
+    source_file = str(doc.get("source_file") or "")
+    # unclassified_自由民主党_001027837.xlsx
+    name = source_file.replace("\\", "/").split("/")[-1]
+    if name.startswith("unclassified_"):
+        body = name[len("unclassified_"):]
+        party = body.rsplit("_", 1)[0]
+        return party.replace("NHK党", "ＮＨＫ党")
+    return ""
+
+
+def _is_list_person_header(name: str) -> bool:
+    if not name:
+        return False
+    if name.startswith(("小計", "政党", "得票", "名簿")):
+        return False
+    if "得票" in name or "率" in name:
+        return False
+    return True
+
+
+def parse_sangiin_pr_list_by_prefecture(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
+    """unclassified_* = （11）都道府県別党派別名簿登載者別得票数。"""
+    from soumu_election.normalize import PREFECTURE, base, candidate_name, compact, number
+
+    party = _party_from_sangiin_doc(doc, table)
+    if not party:
+        return []
+    output: list[dict[str, Any]] = []
+    row_index = 0
+    while row_index < len(table):
+        row = table[row_index]
+        if compact(row[0] if row else None) != "名簿登載者名":
+            row_index += 1
+            continue
+        people: list[tuple[int, str, str, bool | None]] = []
+        for col, value in enumerate(row[1:], start=1):
+            raw = str(value or "").strip()
+            label = compact(raw)
+            if not _is_list_person_header(label):
+                continue
+            name, raw_name = candidate_name(raw)
+            if not name:
+                continue
+            people.append((col, name, raw_name, None))
+        if not people:
+            row_index += 1
+            continue
+
+        # 当落行（任意）
+        elected_index = row_index + 1
+        if elected_index < len(table) and compact(table[elected_index][0] if table[elected_index] else None) == "当落":
+            elected_row = table[elected_index]
+            updated = []
+            for col, name, raw_name, _ in people:
+                mark = compact(elected_row[col] if col < len(elected_row) else None)
+                elected = True if mark == "当" else False if mark == "落" else None
+                updated.append((col, name, raw_name, elected))
+            people = updated
+            data_start = elected_index + 1
+        else:
+            data_start = row_index + 1
+
+        cursor = data_start
+        while cursor < len(table):
+            data_row = table[cursor]
+            label0 = compact(data_row[0] if data_row else None)
+            if label0 in {"順位", "名簿登載者名", "当落"}:
+                break
+            if label0.startswith("政党等の名称"):
+                break
+            if PREFECTURE.search(label0) or label0 in {"計", "合計", "全国"}:
+                for col, name, raw_name, elected in people:
+                    value = number(data_row[col] if col < len(data_row) else None)
+                    if value is None:
+                        continue
+                    fact = base(doc, sheet, cursor, col)
+                    fact.update({
+                        "contest": "pr",
+                        "prefecture": label0,
+                        "party": party,
+                        "candidate": name,
+                        "candidate_raw": raw_name,
+                        "elected": elected,
+                        "metric": "candidate_votes",
+                        "value": value,
+                        "unit": "votes",
+                        "source_code": "03-11",
+                    })
+                    output.append(fact)
+            cursor += 1
+        row_index = cursor
     return _attach_chamber(output)
 
 
@@ -463,5 +580,6 @@ SANGIIN_PARSERS = {
     "03-08": parse_sangiin_ballots,
     "03-09": parse_sangiin_pr_ranking,
     "03-10": parse_sangiin_pr_list_candidates,
+    "03-11": parse_sangiin_pr_list_by_prefecture,
     "03-13": parse_sangiin_district_candidates,
 }

@@ -35,7 +35,9 @@ def main() -> int:
         print(f"{code}: {len(facts)} facts metrics={dict(metrics)}")
         if code == "03-13":
             print(f"  prefs={len(prefs)} elected={sum(1 for f in facts if f.get('elected'))}")
-            print(f"  sample={[(f['prefecture'], f['candidate'], f['value'], f.get('elected')) for f in facts[:5]]}")
+            seats = Counter(f.get("district_number") for f in facts)
+            print(f"  seats={dict(sorted((k,v) for k,v in seats.items() if k is not None))}")
+            print(f"  sample={[(f['prefecture'], f.get('district_number'), f['candidate'], f['value']) for f in facts[:5]]}")
             missing = {"鳥取県・島根県", "徳島県・高知県"} - set(prefs)
             print(f"  combined missing={missing}")
         if code == "03-05":
