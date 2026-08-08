@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-08T22:49:47.211073+00:00",
+  "generated_at": "2026-08-08T23:00:27.210895+00:00",
   "election_kaiji": [
     44,
     45,
@@ -11,6 +11,7 @@
     51
   ],
   "election_ids": [
+    "sangiin-22",
     "sangiin-23",
     "sangiin-24",
     "sangiin-25",
@@ -25,5 +26,5 @@
     "shugiin-50",
     "shugiin-51"
   ],
-  "facts": 185862
+  "facts": 201330
 }

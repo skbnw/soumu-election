@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "election_type": "sangiin",
+  "kaiji": 22,
+  "election_date": "2010-07-11",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin22/index_1.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin22/sangiin22_7.html"
+  ],
+  "observed_formats": ["xls", "xlsx", "pdf"],
+  "notes": [
+    "平成22年7月11日執行 参議院議員通常選挙 速報結果",
+    "本結果は index_1.html（index.html は別の速報・立候補状況ページ）",
+    "市区町村別は sangiin22_7.html / sangiin22_7_XX.html",
+    "衆院と用語が異なる（選挙区／比例代表）。項番は SANGIIN_INDEX_CODES で管理"
+  ]
+}

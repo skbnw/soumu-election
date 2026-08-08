@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# v1.2.3: 参院 index_1.html（本結果）を優先選択（index.html が別速報の場合がある）
 # v1.2.2: 参院市区町村ハブを _7/_8 両対応、indexの「市区町村別得票」リンクも利用、404をスキップ
 # v1.2.1: 合同選挙区を district 分類（衆院「○○選挙区」比例と区別）
 # v1.2.0: 参院市区町村を sangiinN_8.html ツリーから取得（shikuchouson フォールバック）
@@ -292,6 +293,33 @@ def discover_municipality_pages(
     return links
 
 
+def choose_summary_index(
+    session: requests.Session,
+    base: str,
+    *,
+    index_codes: dict[str, str],
+) -> tuple[str, list[dict[str, str]]]:
+    """Pick the best summary index page among index.html / index_1.html."""
+    candidates = [f"{base}/index.html", f"{base}/index_1.html"]
+    best_url = candidates[0]
+    best_links: list[dict[str, str]] = []
+    best_score = -1
+    for url in candidates:
+        try:
+            links = discover_page(session, url, "summary", index_codes=index_codes)
+        except (RuntimeError, requests.RequestException):
+            continue
+        coded = sum(1 for item in links if item.get("source_code"))
+        score = coded * 100 + len(links)
+        if score > best_score:
+            best_score = score
+            best_url = url
+            best_links = links
+    if best_score < 0:
+        raise RuntimeError(f"summary index を取得できません: {base}")
+    return best_url, best_links
+
+
 def discover(
     session: requests.Session,
     kaiji: int,
@@ -301,9 +329,13 @@ def discover(
     if chamber not in {"shugiin", "sangiin"}:
         raise ValueError(f"unsupported chamber: {chamber}")
     base = f"{BASE_URL}/senkyo/senkyo_s/data/{chamber}{kaiji}"
-    pages = [f"{base}/index.html"]
     codes = SANGIIN_INDEX_CODES if chamber == "sangiin" else INDEX_CODES
-    links = discover_page(session, pages[0], "summary", index_codes=codes)
+    if chamber == "sangiin":
+        index_url, links = choose_summary_index(session, base, index_codes=codes)
+        pages = [index_url]
+    else:
+        pages = [f"{base}/index.html"]
+        links = discover_page(session, pages[0], "summary", index_codes=codes)
 
     municipality_links: list[dict[str, str]] = []
     if chamber == "shugiin" and kaiji >= 45:
