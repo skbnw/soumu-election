@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# v1.2.4: 参院市区町村ハブ sangiinN_3_14.html / サブページ _3_14_XX 対応（第21回）
 # v1.2.3: 参院 index_1.html（本結果）を優先選択（index.html が別速報の場合がある）
 # v1.2.2: 参院市区町村ハブを _7/_8 両対応、indexの「市区町村別得票」リンクも利用、404をスキップ
 # v1.2.1: 合同選挙区を district 分類（衆院「○○選挙区」比例と区別）
@@ -251,9 +252,12 @@ def classify_municipality_category(link_label: str) -> str:
     # 参院: 「選挙区」「合同選挙区」
     if text == "選挙区" or "合同選挙区" in text or text.startswith("選挙区"):
         return "district"
-    if "政党" in text or "党派" in text:
+    if text in {"政党別", "党派別"} or ((("政党" in text) or ("党派" in text)) and "別" in text):
         return "pr-party"
     if "候補" in text:
+        return "pr-cand"
+    # 参院第21回など: 都道府県ページ上の党名リンクは名簿候補別PDF
+    if any(token in text for token in ("党", "ネット", "維新", "無所属")):
         return "pr-cand"
     # 衆院: 「○○選挙区」は比例ブロック、それ以外の都道府県リンクは小選挙区
     if text.endswith("選挙区"):
@@ -276,8 +280,9 @@ def discover_municipality_pages(
     subpages: list[tuple[str, str]] = []
     for anchor in soup.find_all("a", href=True):
         href = anchor["href"]
-        # 衆院: shikuchouson_XX.html / 参院: sangiinN_7_XX.html or sangiinN_8_XX.html
-        if not re.search(r"(?:shikuchouson_\d+|sangiin\d+_[78]_\d+)\.html$", href):
+        # 衆院: shikuchouson_XX.html
+        # 参院: sangiinN_7_XX / sangiinN_8_XX / sangiinN_3_14_XX.html
+        if not re.search(r"(?:shikuchouson_\d+|sangiin\d+_(?:[78]|3_14)_\d+)\.html$", href):
             continue
         subpages.append((urljoin(page_url, href), clean_text(anchor.get_text(" ", strip=True)) or "unknown"))
     if not subpages:
@@ -352,13 +357,14 @@ def discover(
             for anchor in index_soup.find_all("a", href=True):
                 label = clean_text(anchor.get_text(" ", strip=True))
                 href = urljoin(pages[0], anchor["href"])
-                if "市区町村別得票" in label and href.endswith(".html"):
+                if ("市区町村別得票" in label or "市区町村別" in label) and href.endswith(".html"):
                     candidates.append(href)
         except Exception:
             pass
         candidates.extend([
             f"{base}/{chamber}{kaiji}_8.html",
             f"{base}/{chamber}{kaiji}_7.html",
+            f"{base}/{chamber}{kaiji}_3_14.html",
             f"{base}/shikuchouson.html",
         ])
         municipality_page = None

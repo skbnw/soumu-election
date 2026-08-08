@@ -1,3 +1,4 @@
+# v1.2.0: 参院市区町村PDF（テキスト抽出可能な福岡など）を取込
 # v1.1.2: 市区町村名の選挙区接尾辞を統一（全角/半角括弧・数字）
 # v1.1.1: pr_party/pr_cand ファイル名のラベル抽出を修正（都道府県コード欠け）
 # v1.1.0: 参院（sangiin）市区町村対応（district / pr_party / pr_cand）、election_id・chamber 列
@@ -9,6 +10,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import duckdb
 
@@ -226,8 +228,221 @@ def parse_pr_kaiji(root: Path, kaiji: int) -> list[dict]:
     return rows
 
 
+def extract_pdf_tables(path: Path) -> list[list[list[Any]]]:
+    """Extract tables from text-based PDFs via pdfplumber."""
+    import pdfplumber
+
+    tables: list[list[list[Any]]] = []
+    with pdfplumber.open(path) as pdf:
+        if not any(len(page.chars) > 20 for page in pdf.pages[: min(2, len(pdf.pages))]):
+            raise ValueError(f"画像スキャンPDFのためテキスト表を抽出できません: {path.name}")
+        for page in pdf.pages:
+            for table in page.extract_tables() or []:
+                cleaned: list[list[Any]] = []
+                for row in table:
+                    cleaned.append([
+                        (cell.replace("\n", "") if isinstance(cell, str) else cell)
+                        for cell in row
+                    ])
+                # skip tiny junk tables
+                if len(cleaned) >= 3 and max(len(r) for r in cleaned) >= 3:
+                    tables.append(cleaned)
+    if not tables:
+        raise ValueError(f"PDF表が見つかりません: {path.name}")
+    return tables
+
+
+def parse_sangiin_muni_district_pdf(path: Path, source: dict[str, str], kaiji: int) -> list[dict]:
+    """参院選挙区・市区町村得票（テキストPDF。福岡22など）。"""
+    prefecture = prefecture_from_label(source.get("label") or "")
+    eid = election_id_of("sangiin", kaiji)
+    code = source_code_from_name(path.name, "03-14-district")
+    rows: list[dict] = []
+    for table in extract_pdf_tables(path):
+        party_row_i = None
+        cand_row_i = None
+        for i, row in enumerate(table[:6]):
+            texts = [clean_text(c) for c in row]
+            if any(t and ("党" in t or t == "無所属") for t in texts[1:]):
+                party_row_i = i
+            if party_row_i is not None and i > party_row_i:
+                if sum(1 for t in texts[1:] if t and not t.isdigit() and "計" not in t) >= 2:
+                    cand_row_i = i
+                    break
+        if party_row_i is None or cand_row_i is None:
+            if len(table) >= 3:
+                party_row_i, cand_row_i = 1, 2
+            else:
+                continue
+        parties = table[party_row_i]
+        cands = table[cand_row_i]
+        cols: list[tuple[int, str, str | None]] = []
+        for col in range(1, max(len(parties), len(cands))):
+            cand = clean_text(cands[col] if col < len(cands) else None)
+            party = clean_text(parties[col] if col < len(parties) else None)
+            if not cand or cand.isdigit() or "小計" in cand or cand == "計":
+                continue
+            cols.append((col, cand, party))
+        for row in table[cand_row_i + 1 :]:
+            muni = clean_text(row[0] if row else None)
+            if not muni or muni.endswith("計") or muni in {"合計", "総計"} or "＊" in muni:
+                continue
+            for col, cand_raw, party in cols:
+                vote = parse_vote(row[col] if col < len(row) else None)
+                if vote is None:
+                    continue
+                cand = normalize_person_name(cand_raw)
+                rows.append({
+                    "election_id": eid,
+                    "chamber": "sangiin",
+                    "election_kaiji": kaiji,
+                    "category": "選挙区",
+                    "contest": "district",
+                    "prefecture": prefecture,
+                    "prefecture_code": prefecture_code_of(prefecture),
+                    "district_number": None,
+                    "municipality": normalize_municipality_name(muni),
+                    "subject": compact_name(cand),
+                    "candidate": compact_name(cand),
+                    "party": compact_name(party),
+                    "metric": "candidate_votes",
+                    "value": vote,
+                    "unit": "votes",
+                    "grain": "municipality",
+                    "source_code": code,
+                    "source_file": path.name,
+                })
+    return rows
+
+
+def parse_sangiin_muni_pr_party_pdf(path: Path, source: dict[str, str], kaiji: int) -> list[dict]:
+    """参院比例・政党別市区町村得票（テキストPDF）。"""
+    prefecture = prefecture_from_label(source.get("label") or "")
+    eid = election_id_of("sangiin", kaiji)
+    code = source_code_from_name(path.name, "03-14-pr_party")
+    if "pr-party" in path.name:
+        code = source_code_from_name(path.name, "03-14-pr-party")
+    rows: list[dict] = []
+    for table in extract_pdf_tables(path):
+        party_row_i = None
+        for i, row in enumerate(table[:5]):
+            texts = [clean_text(c) for c in row[1:]]
+            if sum(1 for t in texts if t and ("党" in t or "改革" in t or "創新" in t or t == "無所属")) >= 2:
+                party_row_i = i
+                break
+        if party_row_i is None:
+            party_row_i = 1
+        parties = table[party_row_i]
+        cols: list[tuple[int, str]] = []
+        for col in range(1, len(parties)):
+            party = clean_text(parties[col])
+            if not party or party.isdigit() or "小計" in party:
+                continue
+            cols.append((col, party))
+        for row in table[party_row_i + 1 :]:
+            muni = clean_text(row[0] if row else None)
+            if not muni or muni.endswith("計") or muni in {"合計", "総計"} or "＊" in muni:
+                continue
+            for col, party in cols:
+                vote = parse_vote(row[col] if col < len(row) else None)
+                if vote is None:
+                    continue
+                rows.append({
+                    "election_id": eid,
+                    "chamber": "sangiin",
+                    "election_kaiji": kaiji,
+                    "category": "比例代表",
+                    "contest": "pr",
+                    "prefecture": prefecture,
+                    "prefecture_code": prefecture_code_of(prefecture),
+                    "district_number": None,
+                    "municipality": normalize_municipality_name(muni),
+                    "pr_block": None,
+                    "subject": compact_name(party),
+                    "candidate": None,
+                    "party": compact_name(party),
+                    "metric": "party_votes",
+                    "value": vote,
+                    "unit": "votes",
+                    "grain": "municipality",
+                    "source_code": code,
+                    "source_file": path.name,
+                })
+    return rows
+
+
+def parse_sangiin_muni_pr_cand_pdf(path: Path, source: dict[str, str], kaiji: int) -> list[dict]:
+    """参院比例・名簿候補別市区町村得票（テキストPDF）。"""
+    prefecture = prefecture_from_label(source.get("label") or "")
+    eid = election_id_of("sangiin", kaiji)
+    code = source_code_from_name(path.name, "03-14-pr_cand")
+    if "pr-cand" in path.name:
+        code = source_code_from_name(path.name, "03-14-pr-cand")
+    rows: list[dict] = []
+    for table in extract_pdf_tables(path):
+        if len(table) < 3:
+            continue
+        header = table[0]
+        names = table[1]
+        party = None
+        for cell in header[1:4]:
+            text = clean_text(cell)
+            if not text:
+                continue
+            match = re.match(r"(.+?)(?:合計|政党|候補者)", text)
+            if match:
+                party = match.group(1)
+                break
+            if "党" in text:
+                party = re.sub(r"(合計|政党|候補者).*$", "", text)
+                break
+        use_cols: list[tuple[int, str]] = []
+        for col in range(1, max(len(header), len(names))):
+            h = clean_text(header[col] if col < len(header) else None) or ""
+            n = clean_text(names[col] if col < len(names) else None) or ""
+            if any(k in h for k in ("合計得票", "政党得票", "候補者得票")):
+                continue
+            if re.fullmatch(r"\d{1,2}", h) and n:
+                use_cols.append((col, n))
+        if not use_cols:
+            continue
+        for row in table[2:]:
+            muni = clean_text(row[0] if row else None)
+            if not muni or muni.endswith("計") or "＊" in muni:
+                continue
+            for col, cand_raw in use_cols:
+                vote = parse_vote(row[col] if col < len(row) else None)
+                if vote is None:
+                    continue
+                cand = normalize_person_name(cand_raw)
+                rows.append({
+                    "election_id": eid,
+                    "chamber": "sangiin",
+                    "election_kaiji": kaiji,
+                    "category": "比例代表",
+                    "contest": "pr",
+                    "prefecture": prefecture,
+                    "prefecture_code": prefecture_code_of(prefecture),
+                    "district_number": None,
+                    "municipality": normalize_municipality_name(muni),
+                    "pr_block": None,
+                    "subject": compact_name(cand),
+                    "candidate": compact_name(cand),
+                    "party": compact_name(party),
+                    "metric": "candidate_votes",
+                    "value": vote,
+                    "unit": "votes",
+                    "grain": "municipality",
+                    "source_code": code,
+                    "source_file": path.name,
+                })
+    return rows
+
+
 def parse_sangiin_muni_district(path: Path, source: dict[str, str], kaiji: int) -> list[dict]:
     """参院 選挙区・候補者別市区町村得票（衆院 SMD と同型＋政党等名）。"""
+    if path.suffix.lower() == ".pdf":
+        return parse_sangiin_muni_district_pdf(path, source, kaiji)
     prefecture = prefecture_from_label(source.get("label") or "")
     adjusted = {**source, "label": prefecture}
     records = parse_smd(path, adjusted, kaiji)
@@ -262,6 +477,8 @@ def parse_sangiin_muni_district(path: Path, source: dict[str, str], kaiji: int) 
 
 def parse_sangiin_muni_pr_party(path: Path, source: dict[str, str], kaiji: int) -> list[dict]:
     """参院 比例・政党別市区町村得票（党ごとに得票総数/政党/名簿の3列）。"""
+    if path.suffix.lower() == ".pdf":
+        return parse_sangiin_muni_pr_party_pdf(path, source, kaiji)
     prefecture = prefecture_from_label(source.get("label") or "")
     eid = election_id_of("sangiin", kaiji)
     code = source_code_from_name(path.name, "03-14-pr_party")
@@ -339,6 +556,8 @@ def parse_sangiin_muni_pr_party(path: Path, source: dict[str, str], kaiji: int) 
 
 def parse_sangiin_muni_pr_cand(path: Path, source: dict[str, str], kaiji: int) -> list[dict]:
     """参院 比例・名簿登載者別市区町村得票（シート＝政党）。"""
+    if path.suffix.lower() == ".pdf":
+        return parse_sangiin_muni_pr_cand_pdf(path, source, kaiji)
     prefecture = prefecture_from_label(source.get("label") or "")
     eid = election_id_of("sangiin", kaiji)
     code = source_code_from_name(path.name, "03-14-pr_cand")
@@ -400,6 +619,7 @@ def parse_sangiin_muni_pr_cand(path: Path, source: dict[str, str], kaiji: int) -
                     "source_row": excel_row,
                 })
     return rows
+
 
 
 def label_from_muni_filename(name: str) -> str:

@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "election_type": "sangiin",
+  "kaiji": 21,
+  "election_date": "2007-07-29",
+  "source_pages": [
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin21/index.html",
+    "https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin21/sangiin21_3_14.html"
+  ],
+  "observed_formats": ["xls", "pdf"],
+  "notes": [
+    "平成19年7月29日執行 参議院議員通常選挙 速報結果",
+    "要約表は xls/（ローカル相対パス）。市区町村は sangiin21_3_14.html → 都道府県別の画像スキャンPDF",
+    "市区町村PDFは文字レイヤがなく自動正規化対象外（広島22と同様、人手確認が必要）",
+    "衆院と用語が異なる（選挙区／比例代表）。項番は SANGIIN_INDEX_CODES で管理"
+  ]
+}
