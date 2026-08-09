@@ -1,0 +1,59 @@
+---
+description: 国政選データの正本／二次ソース原則と格納段取り
+alwaysApply: true
+---
+
+# データ出典の権威階層
+
+## 原則（必ず守る）
+
+1. **正本は総務省 MIC**（`data/*/raw` → normalize → `data/warehouse` → `web/data`）。公開UIの得票・当落・有権者等の公式指標は MIC を優先する。
+2. **衆院の二次アーカイブは政治学会**（`references/seiji-gakkai/`）。研究用レイヤとして保管・正規化する。MIC の代替正本にしない。
+   - **小選挙区制（1996– / 第41回–）** と **中選挙区制（1958–1993 / 第28–40回）** は別系列。同一 `facts` に混ぜない。
+3. **参院の二次アーカイブは関西大・参院選DB**（`references/sangiin-kansai-u.ac.jp/`）。MIC 欠落の穴埋めに限って倉庫へ載せる（既存の `kansai-*`）。全置換しない。
+4. **読売等の紙面・人名レイヤ**（比例名簿・別名）は表示・検索補助。MIC/二次の数値正本を上書きしない。
+5. **混在禁止**: 同一メトリクスで MIC 行と二次行を silently merge しない。必ず `source_code`（例: `03-13`, `kansai-district-21`, 将来 `seiji-gakkai-*`）で分離する。
+6. **横断一貫性**は共通ディメンション（人名別名・政党・地理）で突合する。二次ソース同士のコード体系を無理に統一しない。
+7. **読売紙面・CSVの誤り**（誤 `giin_cd`、別人結合など）は原本を改変しない。補正は下流の aliases／override レイヤで行い、根拠ソースを残す。
+   - 手動: `code/03-person-aliases/yomi_giin_cd_overrides.json`
+   - 自動: 国会議員白書の一意名一致
+   - 優先: override → 白書一意名 → CSV `giin_cd`
+8. **中選挙区 historical** は `02-silver/historical/`（`genre=HR-Historical`, `system=MMD`）に固定。倉庫接続時は `seiji-gakkai-historical-*`。
+   - **当面は Web 非掲載**（衆院選タブにも第3コーナにも出さない）。
+   - 将来公開するならチャンバー「衆院選（中選挙区）」を新設する。既存の衆院選に混ぜない。
+
+```text
+✅ GOOD: MIC facts + kansai 穴埋め（source_code 別）+ yomi 名簿（別 parquet）
+❌ BAD:  衆=政治学会のみ／参=関西大のみを「公式横断DB」の正本にする
+
+制度系列:
+✅ GOOD: 1996– 小選挙区 Silver と 1958–1993 MMD historical を並置（別パス・別 genre）
+❌ BAD:  中選挙区得票を小選挙区 facts の candidate_votes に silently merge
+
+読売誤り（例: 山口3区・林芳正に安倍の r02187）:
+✅ GOOD: 原本CSVは保持。overrides.json + 白書名解決で aliases を補正
+❌ BAD:  references の読売原本を直接書き換えて「正しかったことにする」
+```
+
+## 格納段取り（この順で進める）
+
+1. **references 固定**  
+   - 衆: `references/seiji-gakkai/` + `data-memo.txt`（小選挙区 1996– と中選挙区 historical を分離）  
+   - 参: `references/sangiin-kansai-u.ac.jp/` + `data-memo.txt`（利用条件・収録回を明記）
+2. **二次正規化（倉庫の外）**  
+   - 政治学会・小選挙区: SH-D は `code/04-seiji-gakkai/run_sh_d_pipeline_v1.0.py`  
+   - 政治学会・中選挙区: Silver は `02-silver/historical/`（検証 `verify_historical_mmd_silver_v1.0.py`）  
+   - 関西大: 既存 CSV を回次・種別で固定配置（現行どおり）。
+3. **倉庫接続（opt-in）**  
+   - 関西大: 現状維持（参21全面・参22未接続県の municipality 穴埋め）。  
+   - 政治学会・小選挙区: `seiji_gakkai_smd_district_votes.parquet` / `seiji_gakkai_smd_municipality_votes.parquet` / `seiji_gakkai_turnout.parquet`（grain: prefecture/district/municipality + PR block/national） / `seiji_gakkai_pr_votes.parquet` / `seiji_gakkai_pr_municipality_votes.parquet`（SH-HD、`seiji-gakkai-pr-muni-*`）。**MIC に merge しない**。地名は raw 保持＋手動 override。  
+   - 政治学会・中選挙区: 当面エクスポートなし（Web 非掲載）。
+4. **Web 公開**  
+   - 既定表示は **統合（MIC 優先＋政治学会穴埋め）** の小選挙区制以降。同一キーでは常に MIC。行ごとに `source_code` を残す（物理 merge しない）。  
+   - **中選挙区は当面非掲載**。公開時は「衆院選（中選挙区）」第3コーナのみ（既存衆院選に混在させない）。  
+   - データソース切替: 統合（既定）／総務省のみ／政治学会のみ。  
+   - 人名表示: `seiji_candidate_name_map.parquet`（読売漢字リスト×政治学会かな）。数値は触らない。  
+   - 読売比例名簿は衆41回（1996）以降。  
+   - ABOUT／ルールに出典階層を残す。
+5. **検証**  
+   - 回次カバレッジ差分、票合計の MIC 対比、`source_code` 分布をレポートしてから merge。

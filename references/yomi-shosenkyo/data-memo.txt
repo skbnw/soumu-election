@@ -1,0 +1,40 @@
+# 人名正本・別名レイヤ
+
+## 正本
+読売紙面掲載名（`references/yomi-shosenkyo/yomi-election-data-1996-2026.csv`）
+- キー: `giin_cd`（例: `r02606` 逢坂誠二、`r01880` 武部勤）
+
+## 漢字リスト（表示・検索補助）
+`yomi-candidate-kanji1996-2026.csv`（約 11,892 行・衆41〜51回）
+- 政治学会かな名の漢字化に使う。**数値正本ではない**。原本CSVは改変しない。
+- 突合: `(th, prefecture, district_number, vote)` 優先
+- 生成: `python code/03-person-aliases/build_seiji_kana_to_kanji_v1.0.py`
+- 出力: `web/data/seiji_candidate_name_map.parquet`、突合レポート `output/03-person-aliases/*_kanji_match_report.txt`
+
+## 別名ソース
+1. 読売 print の同一 giin_cd の表記
+2. 国会議員白書 `references/kokkai.sugawarataku.net`（漢字・かな・r#####）
+3. 総務省 MIC facts の小選挙区氏名（選挙区内で読売候補と突合できた行のみ）
+   - 異体字セレクタ (IVS)、外字 PUA、かな混じり（おおさか誠二）を含む
+4. 政治学会かな ↔ 読売漢字マップ（上記）
+
+## 誤 giin_cd の補正
+原本CSVは改変しない。手動補正は:
+- `code/03-person-aliases/yomi_giin_cd_overrides.json`
+優先順: **手動 override → 国会議員白書の一意名 → CSVの giin_cd**
+
+既知例: 衆49・山口3区「林芳正」に誤付与された `r02187`（安倍）→ `r03160` へ。
+
+## 生成
+```
+python code/03-person-aliases/build_seiji_kana_to_kanji_v1.0.py
+python code/03-person-aliases/build_person_name_aliases_v1.0.py
+```
+出力:
+- `output/03-person-aliases/person_name_aliases.jsonl`
+- `web/data/person_name_aliases.parquet`
+- `web/data/seiji_candidate_name_map.parquet`
+
+## UI
+小選挙区・市町村・比例名簿のキーワード検索で別名を人物展開。
+表示名は `canonical_name`（読売正本）を優先。統合UIでは政治学会行も漢字マップがあれば漢字表示。

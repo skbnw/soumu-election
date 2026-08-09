@@ -1,0 +1,44 @@
+# seiji kana → yomi kanji match report
+generated_at=2026-08-09T23:10:39
+yomi_rows_usable=11892
+seiji_candidate_rows=8803
+matched=8707
+unmatched=96
+match_rate=0.9891
+web_out=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\seiji_candidate_name_map.parquet
+
+## methods
+- th_pref_dist_vote: 8707
+- unmatched: 96
+
+## unmatched sample (up to 30)
+- th=41 北海道6区 ササキヒデノリ vote=76573 party=民主
+- th=41 青森県4区 キムラショウシロウ vote=21035 party=共産
+- th=41 福島県1区 サトウタツオ vote=102951 party=自民
+- th=41 福島県3区 スズキショウイチ vote=11032 party=共産
+- th=41 栃木県2区 コバヤシマモル vote=55440 party=民主
+- th=41 埼玉県4区 ハヤカワタダタカ vote=46870 party=自民
+- th=41 埼玉県10区 ヤマグチタイメイ vote=74840 party=自民
+- th=41 埼玉県11区 カトウタクジ vote=78706 party=自民
+- th=41 埼玉県12区 マスダトシオ vote=76106 party=新進
+- th=41 埼玉県12区 カドタトシオ vote=19370 party=自連
+- th=41 埼玉県14区 ヤマダヒロヨシ vote=34719 party=共産
+- th=41 千葉県10区 イチカワヒロシ vote=17235 party=共産
+- th=41 東京都13区 スズキケンイチ vote=41919 party=共産
+- th=41 神奈川県7区 スズキツネオ vote=75600 party=自民
+- th=41 新潟県4区 ワタナベノリヒコ vote=15409 party=共産
+- th=41 静岡県5区 サイトウトシツグ vote=76493 party=自民
+- th=41 兵庫県11区 ゴトウシゲル vote=28304 party=民主
+- th=41 福岡県2区 ヤマサキヒロタロウ vote=73067 party=新進
+- th=41 熊本県2区 ノダタケシ vote=97243 party=新進
+- th=41 熊本県2区 ハヤシダタケシ vote=79249 party=自民
+- th=42 福島県1区 カメオカヨシタミ vote=68875 party=無所属
+- th=42 福島県1区 サトウツネハル vote=28252 party=社民
+- th=42 福島県5区 ヨシダイズミ vote=73904 party=民主
+- th=42 千葉県5区 ナカジママコト vote=25410 party=共産
+- th=42 千葉県10区 ハヤシモトオ vote=126838 party=自民
+- th=42 神奈川県11区 コイズミヤスシ vote=27891 party=共産
+- th=42 愛知県3区 カタオカタケシ vote=62243 party=自民
+- th=42 大阪府14区 ヤマモトタカシ vote=67599 party=民主
+- th=42 兵庫県12区 ヤマグチアユム vote=3263 party=自連
+- th=42 福岡県3区 フジタカズエ vote=80731 party=民主

@@ -1,0 +1,34 @@
+# unified export verification
+generated_at=2026-08-09T23:21:23
+
+## SH-HD pr municipality
+  rows  kaiji  sources
+192366      8        8
+
+## turnout grains
+       grain contest     n
+       block      pr   264
+    national      pr    24
+    district     smd  7152
+municipality     smd 61974
+  prefecture     smd  1128
+
+## kanji map
+ matched_rows  kaiji  methods
+         8707      8        1
+
+## SH-HD source_code
+            source_code     n
+seiji-gakkai-pr-muni-41 31425
+seiji-gakkai-pr-muni-42 31767
+seiji-gakkai-pr-muni-43 23415
+seiji-gakkai-pr-muni-44 19899
+seiji-gakkai-pr-muni-45 20933
+seiji-gakkai-pr-muni-46 22727
+seiji-gakkai-pr-muni-47 21649
+seiji-gakkai-pr-muni-48 20551
+
+## kana→kanji match rate vs seiji district
+ seiji_candidates  mapped  match_rate
+             8803    8707      0.9891
+

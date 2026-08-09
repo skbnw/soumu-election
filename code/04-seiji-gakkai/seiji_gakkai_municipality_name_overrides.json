@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "description": "政治学会 SH-D 市区町村名の既知ノイズ補正。原本は改変せず、エクスポート時のみ適用。",
+  "overrides": [
+    {
+      "field": "city",
+      "match": "鳳 珠 郡",
+      "replace": "鳳珠郡",
+      "note": "漢字間スペース（石川3区・第48回）。原文は city_raw に保持"
+    }
+  ]
+}

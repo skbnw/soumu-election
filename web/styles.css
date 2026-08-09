@@ -137,8 +137,11 @@ main { max-width: 1200px; margin: auto; padding: 0 24px; }
   background: var(--soft);
   border: 1px solid var(--line);
 }
+.filters[data-tab="smd"] {
+  grid-template-columns: 150px 150px 160px 120px 110px minmax(180px, 1fr) 110px;
+}
 .filters[data-tab="muni"] {
-  grid-template-columns: 130px 140px 110px 160px minmax(160px, 1fr) 100px;
+  grid-template-columns: 150px 130px 140px 110px 160px minmax(140px, 1fr) 100px;
 }
 .filters[data-tab="pr"] {
   grid-template-columns: 120px 110px 130px 140px 160px 110px;
@@ -159,6 +162,8 @@ label[data-show] { display: none; }
 .filters[data-tab="prlist"] label[data-show~="prlist"],
 .filters[data-tab="turnout"] label[data-show~="turnout"],
 .filters[data-tab="judicial"] label[data-show~="judicial"] { display: grid; }
+#data-source-label[hidden],
+#elected-label[hidden] { display: none !important; }
 .filters[data-tab="pr"][data-geolevel="national"] #prefecture-label,
 .filters[data-tab="pr"][data-geolevel="national"] #pr-block-label,
 .filters[data-tab="pr"][data-geolevel="block"] #prefecture-label,
