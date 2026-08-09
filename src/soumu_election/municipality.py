@@ -1,3 +1,6 @@
+# v1.3.2: 関西大選挙区CSVを都道府県集計し、参院県区facts（21–23）を補充
+# v1.3.1: 関西大穴埋めで参22のMIC未接続9県（青森・宮城・東京・神奈川・愛知・広島・香川・高知・鹿児島）に拡大
+# v1.3.0: 関西大・参院選DB（二次ソース）で参21全面・参22広島など穴埋め
 # v1.2.0: 参院市区町村PDF（テキスト抽出可能な福岡など）を取込
 # v1.1.2: 市区町村名の選挙区接尾辞を統一（全角/半角括弧・数字）
 # v1.1.1: pr_party/pr_cand ファイル名のラベル抽出を修正（都道府県コード欠け）
@@ -7,10 +10,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import duckdb
 
@@ -24,6 +28,19 @@ from soumu_election.download import (
     parse_vote,
     workbook_tables,
 )
+
+# 関西大・比較政治研究DB（参院選DB / 名取研究室）二次ソース
+KANSAI_REF_DIR = Path("references") / "sangiin-kansai-u.ac.jp"
+KANSAI_SOURCE_PREFIX = "kansai"
+KANSAI_KIND_FILES = {
+    "district": ("01-選挙区", "01-senkyoku-{kaiji}.csv"),
+    "pr_party": ("03-比例区(政党別)", "03-hirei-seitoubetu-{kaiji}.csv"),
+    "pr_cand": ("04-比例区(個人別)", "04-hirei-kojinbetu-{kaiji}.csv"),
+}
+KANSAI_DB_URL = "http://db.cps.kutc.kansai-u.ac.jp/main/index1.php"
+KANSAI_STATUS_MAP = {"新": "new", "現": "incumbent", "前": "incumbent", "元": "former"}
+# 手元の関西大選挙区CSVで県区（都道府県集計）を補充できる回
+KANSAI_DISTRICT_PREF_KAIJI = (21, 22, 23)
 
 DISTRICT_RE = re.compile(r"第(\d+)区")
 # 例: 札幌市西区（１区） / さいたま市見沼区(1区) / 南九州市(２区） / 札幌市西区第（４区）
@@ -639,37 +656,197 @@ def label_from_muni_filename(name: str) -> str:
     return rest
 
 
-def parse_sangiin_kaiji(root: Path, kaiji: int) -> list[dict]:
+def kansai_ref_root(root: Path) -> Path:
+    return root / KANSAI_REF_DIR
+
+
+def kansai_csv_path(root: Path, kind: str, kaiji: int) -> Path | None:
+    spec = KANSAI_KIND_FILES.get(kind)
+    if not spec:
+        return None
+    subdir, pattern = spec
+    path = kansai_ref_root(root) / subdir / pattern.format(kaiji=kaiji)
+    return path if path.exists() else None
+
+
+def _read_kansai_csv(path: Path) -> list[dict[str, str]]:
+    raw = path.read_bytes()
+    text = None
+    for enc in ("cp932", "utf-8-sig", "utf-8"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise ValueError(f"文字コードを判定できません: {path}")
+    lines = text.splitlines()
+    if not lines:
+        return []
+    # Dataverse系DLの先頭メタ行（city/none/normalized/...）をスキップ
+    start = 1 if lines[0].startswith("city/") or "normalized/" in lines[0] else 0
+    return list(csv.DictReader(lines[start:]))
+
+
+def parse_kansai_sangiin_kind(
+    root: Path,
+    kaiji: int,
+    kind: str,
+    *,
+    prefectures: Iterable[str] | None = None,
+) -> list[dict]:
+    """関西大・参院選DB CSV を municipality_facts 行へ変換する（二次ソース）。"""
+    path = kansai_csv_path(root, kind, kaiji)
+    if path is None:
+        return []
+    pref_filter = {p for p in (prefectures or []) if p} or None
+    eid = election_id_of("sangiin", kaiji)
+    source_code = f"{KANSAI_SOURCE_PREFIX}-{kind}-{kaiji:02d}"
+    rows: list[dict] = []
+    for item in _read_kansai_csv(path):
+        prefecture = clean_text(item.get("都道府県名"))
+        if not prefecture:
+            continue
+        if pref_filter is not None and prefecture not in pref_filter:
+            continue
+        muni = normalize_municipality_name(item.get("市区町村名"))
+        if not muni:
+            continue
+        vote = parse_vote(item.get("市区町村別得票数"))
+        if vote is None:
+            continue
+        party = compact_name(item.get("党派・会派等"))
+        name_raw = clean_text(item.get("名前"))
+        cand = compact_name(normalize_person_name(name_raw)) if name_raw else None
+
+        if kind == "pr_party":
+            if not party:
+                continue
+            category, contest, metric = "比例代表", "pr", "party_votes"
+            subject, candidate = party, None
+        elif kind == "pr_cand":
+            if not cand:
+                continue
+            category, contest, metric = "比例代表", "pr", "candidate_votes"
+            subject, candidate = cand, cand
+        else:  # district
+            if not cand:
+                continue
+            category, contest, metric = "選挙区", "district", "candidate_votes"
+            subject, candidate = cand, cand
+
+        rows.append({
+            "election_id": eid,
+            "chamber": "sangiin",
+            "election_kaiji": kaiji,
+            "category": category,
+            "contest": contest,
+            "prefecture": prefecture,
+            "prefecture_code": prefecture_code_of(prefecture),
+            "district_number": None,
+            "municipality": muni,
+            "pr_block": None,
+            "subject": subject,
+            "candidate": candidate,
+            "party": party,
+            "metric": metric,
+            "value": vote,
+            "unit": "votes",
+            "grain": "municipality",
+            "source_code": source_code,
+            "source_file": path.name,
+        })
+    return rows
+
+
+def parse_kansai_sangiin_fill(
+    root: Path,
+    kaiji: int,
+    *,
+    prefectures: Iterable[str] | None = None,
+    kinds: Iterable[str] = ("district", "pr_party", "pr_cand"),
+) -> list[dict]:
+    """指定回の関西大CSVを種類ごとに取り込む。"""
+    if not kansai_ref_root(root).exists():
+        return []
+    rows: list[dict] = []
+    for kind in kinds:
+        part = parse_kansai_sangiin_kind(root, kaiji, kind, prefectures=prefectures)
+        print(
+            f"kansai fill sangiin {kaiji} {kind}: {len(part)} rows"
+            + (f" prefs={sorted(set(prefectures))}" if prefectures else ""),
+            flush=True,
+        )
+        rows.extend(part)
+    return rows
+
+
+def default_kansai_fill_specs() -> list[dict[str, Any]]:
+    """当面の穴埋め対象: 参21全面 + 参22のMIC未接続都道府県。"""
+    return [
+        {"kaiji": 21, "prefectures": None},
+        {
+            "kaiji": 22,
+            "prefectures": [
+                "青森県",
+                "宮城県",
+                "東京都",
+                "神奈川県",
+                "愛知県",
+                "広島県",
+                "香川県",
+                "高知県",
+                "鹿児島県",
+            ],
+        },
+    ]
+
+
+def parse_sangiin_kaiji(
+    root: Path,
+    kaiji: int,
+    *,
+    kansai_fill: bool = True,
+    kansai_prefs: Iterable[str] | None = None,
+) -> list[dict]:
     chamber = "sangiin"
     raw_dir = root / "data" / f"{chamber}{kaiji}" / "raw"
     urls = load_manifest_urls(root, chamber, kaiji)
     rows: list[dict] = []
-    if not raw_dir.exists():
-        return rows
+    if raw_dir.exists():
+        for path in sorted(raw_dir.glob("03-14-district-*")):
+            label = label_from_muni_filename(path.name)
+            source = {"label": label, "url": urls.get(path.name, ""), "category": "district"}
+            try:
+                rows.extend(parse_sangiin_muni_district(path, source, kaiji))
+            except Exception as exc:
+                print(f"FAIL sangiin district {kaiji} {path.name}: {exc}", flush=True)
 
-    for path in sorted(raw_dir.glob("03-14-district-*")):
-        label = label_from_muni_filename(path.name)
-        source = {"label": label, "url": urls.get(path.name, ""), "category": "district"}
-        try:
-            rows.extend(parse_sangiin_muni_district(path, source, kaiji))
-        except Exception as exc:
-            print(f"FAIL sangiin district {kaiji} {path.name}: {exc}", flush=True)
+        for path in sorted([*raw_dir.glob("03-14-pr_party-*"), *raw_dir.glob("03-14-pr-party-*")]):
+            label = label_from_muni_filename(path.name)
+            source = {"label": label, "url": urls.get(path.name, ""), "category": "pr_party"}
+            try:
+                rows.extend(parse_sangiin_muni_pr_party(path, source, kaiji))
+            except Exception as exc:
+                print(f"FAIL sangiin pr_party {kaiji} {path.name}: {exc}", flush=True)
 
-    for path in sorted([*raw_dir.glob("03-14-pr_party-*"), *raw_dir.glob("03-14-pr-party-*")]):
-        label = label_from_muni_filename(path.name)
-        source = {"label": label, "url": urls.get(path.name, ""), "category": "pr_party"}
-        try:
-            rows.extend(parse_sangiin_muni_pr_party(path, source, kaiji))
-        except Exception as exc:
-            print(f"FAIL sangiin pr_party {kaiji} {path.name}: {exc}", flush=True)
+        for path in sorted([*raw_dir.glob("03-14-pr_cand-*"), *raw_dir.glob("03-14-pr-cand-*")]):
+            label = label_from_muni_filename(path.name)
+            source = {"label": label, "url": urls.get(path.name, ""), "category": "pr_cand"}
+            try:
+                rows.extend(parse_sangiin_muni_pr_cand(path, source, kaiji))
+            except Exception as exc:
+                print(f"FAIL sangiin pr_cand {kaiji} {path.name}: {exc}", flush=True)
 
-    for path in sorted([*raw_dir.glob("03-14-pr_cand-*"), *raw_dir.glob("03-14-pr-cand-*")]):
-        label = label_from_muni_filename(path.name)
-        source = {"label": label, "url": urls.get(path.name, ""), "category": "pr_cand"}
-        try:
-            rows.extend(parse_sangiin_muni_pr_cand(path, source, kaiji))
-        except Exception as exc:
-            print(f"FAIL sangiin pr_cand {kaiji} {path.name}: {exc}", flush=True)
+    if kansai_fill:
+        if kansai_prefs is not None:
+            prefs: list[str] | None = list(kansai_prefs)
+        else:
+            specs = {s["kaiji"]: s.get("prefectures") for s in default_kansai_fill_specs()}
+            if kaiji not in specs:
+                return rows
+            prefs = specs[kaiji]
+        rows.extend(parse_kansai_sangiin_fill(root, kaiji, prefectures=prefs))
 
     return rows
 
@@ -693,12 +870,70 @@ def write_parquet(rows: list[dict], path: Path) -> None:
     ndjson.unlink(missing_ok=True)
 
 
+def merge_kansai_into_municipality_facts(
+    root: Path,
+    specs: list[dict[str, Any]] | None = None,
+) -> dict:
+    """既存 municipality_facts に関西大穴埋め行をマージして書き戻す。"""
+    specs = specs or default_kansai_fill_specs()
+    warehouse = root / "data" / "warehouse" / "parquet" / "municipality_facts.parquet"
+    web = root / "web" / "data" / "municipality_facts.parquet"
+    if not warehouse.exists() and not web.exists():
+        raise FileNotFoundError("municipality_facts.parquet が見つかりません")
+    src = warehouse if warehouse.exists() else web
+
+    new_rows: list[dict] = []
+    for spec in specs:
+        kaiji = int(spec["kaiji"])
+        prefs = spec.get("prefectures")
+        new_rows.extend(parse_kansai_sangiin_fill(root, kaiji, prefectures=prefs))
+
+    drop_codes = sorted({r["source_code"] for r in new_rows})
+    tmp_new = warehouse.parent / "_kansai_new.parquet"
+    write_parquet(new_rows, tmp_new)
+
+    con = duckdb.connect()
+    code_list = ", ".join("'" + c.replace("'", "''") + "'" for c in drop_codes) or "''"
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE merged AS
+        SELECT * FROM read_parquet(?)
+        WHERE source_code IS NULL OR cast(source_code AS VARCHAR) NOT IN ({code_list})
+        """,
+        [str(src)],
+    )
+    kept = con.execute("SELECT count(*) FROM merged").fetchone()[0]
+    con.execute("INSERT INTO merged BY NAME SELECT * FROM read_parquet(?)", [str(tmp_new)])
+    total = con.execute("SELECT count(*) FROM merged").fetchone()[0]
+    warehouse.parent.mkdir(parents=True, exist_ok=True)
+    con.execute(
+        "COPY merged TO ? (FORMAT PARQUET, COMPRESSION ZSTD)",
+        [str(warehouse)],
+    )
+    con.close()
+    tmp_new.unlink(missing_ok=True)
+
+    web.parent.mkdir(parents=True, exist_ok=True)
+    web.write_bytes(warehouse.read_bytes())
+    result = {
+        "added": len(new_rows),
+        "kept": int(kept),
+        "total": int(total),
+        "bytes": warehouse.stat().st_size,
+        "path": str(warehouse),
+        "specs": specs,
+    }
+    print(result, flush=True)
+    return result
+
+
 def build_municipality_facts(
     root: Path,
     kaiji_list: list[int] | None = None,
     *,
     sangiin_kaiji: list[int] | None = None,
     write_legacy: bool = True,
+    kansai_fill: bool = True,
 ) -> dict:
     """Generate municipality_facts.parquet under warehouse and web/data."""
     kaiji_list = kaiji_list if kaiji_list is not None else list(range(45, 52))
@@ -722,7 +957,7 @@ def build_municipality_facts(
 
     for kaiji in sangiin_kaiji:
         print(f"parsing municipality sangiin {kaiji} ...", flush=True)
-        rows = parse_sangiin_kaiji(root, kaiji)
+        rows = parse_sangiin_kaiji(root, kaiji, kansai_fill=kansai_fill)
         summary.append({
             "chamber": "sangiin",
             "kaiji": kaiji,
@@ -754,19 +989,195 @@ def build_municipality_facts(
     return result
 
 
+def parse_kansai_sangiin_district_pref_facts(root: Path, kaiji: int) -> list[dict]:
+    """関西大・選挙区CSVを都道府県×候補に集計し、県区 candidate_votes facts を作る。"""
+    path = kansai_csv_path(root, "district", kaiji)
+    if path is None:
+        return []
+
+    # (prefecture, candidate) -> agg
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in _read_kansai_csv(path):
+        prefecture = clean_text(item.get("都道府県名"))
+        name_raw = clean_text(item.get("名前"))
+        if not prefecture or not name_raw:
+            continue
+        cand = compact_name(normalize_person_name(name_raw))
+        if not cand:
+            continue
+        vote = parse_vote(item.get("市区町村別得票数"))
+        if vote is None:
+            continue
+        key = (prefecture, cand)
+        bucket = buckets.get(key)
+        if bucket is None:
+            seats = parse_vote(item.get("定数"))
+            rank = parse_vote(item.get("順位"))
+            status = compact_name(item.get("現新"))
+            buckets[key] = {
+                "prefecture": prefecture,
+                "candidate": cand,
+                "candidate_raw": name_raw,
+                "party": compact_name(item.get("党派・会派等")),
+                "age": parse_vote(item.get("年齢")),
+                "seats": int(seats) if seats is not None else None,
+                "rank": int(rank) if rank is not None else None,
+                "candidate_status": KANSAI_STATUS_MAP.get(status or ""),
+                "votes": 0.0,
+            }
+            bucket = buckets[key]
+        bucket["votes"] += float(vote)
+
+    source_code = f"{KANSAI_SOURCE_PREFIX}-district-pref-{kaiji:02d}"
+    rows: list[dict] = []
+    for bucket in buckets.values():
+        seats = bucket["seats"]
+        rank = bucket["rank"]
+        if seats is not None and rank is not None:
+            elected = rank <= seats
+        else:
+            elected = None
+        rows.append({
+            "election_kaiji": kaiji,
+            "chamber": "sangiin",
+            "election_type": "sangiin",
+            "contest": "district",
+            "prefecture": bucket["prefecture"],
+            "prefecture_code": prefecture_code_of(bucket["prefecture"]),
+            "district_number": seats,
+            "candidate": bucket["candidate"],
+            "candidate_raw": bucket["candidate_raw"],
+            "party": bucket["party"],
+            "age": int(bucket["age"]) if bucket["age"] is not None else None,
+            "candidate_status": bucket["candidate_status"],
+            "elected": elected,
+            "metric": "candidate_votes",
+            "value": bucket["votes"],
+            "unit": "votes",
+            "source_code": source_code,
+            "dataset": f"関西大・参院選DB 選挙区（都道府県集計） 第{kaiji}回",
+            "source_url": KANSAI_DB_URL,
+            "source_file": path.name,
+            "source_sheet": "aggregated",
+            "source_cell": f"{bucket['prefecture']}:{bucket['candidate']}",
+        })
+
+    # 順位が欠ける場合は得票上位=当選で補完
+    by_pref: dict[str, list[dict]] = {}
+    for row in rows:
+        by_pref.setdefault(row["prefecture"], []).append(row)
+    for pref_rows in by_pref.values():
+        if all(r["elected"] is not None for r in pref_rows):
+            continue
+        seats = next((r["district_number"] for r in pref_rows if r["district_number"]), None)
+        if not seats:
+            continue
+        ordered = sorted(pref_rows, key=lambda r: (-(r["value"] or 0), r["candidate"] or ""))
+        winners = {id(r) for r in ordered[: int(seats)]}
+        for row in pref_rows:
+            if row["elected"] is None:
+                row["elected"] = id(row) in winners
+
+    print(f"kansai district-pref sangiin {kaiji}: {len(rows)} rows", flush=True)
+    return rows
+
+
+def merge_kansai_district_pref_into_facts(
+    root: Path,
+    kaiji_list: list[int] | None = None,
+) -> dict:
+    """既存 facts.parquet に関西大県区（都道府県集計）をマージする。"""
+    from soumu_election.warehouse import FACT_COLUMNS, fact_row
+
+    kaiji_list = kaiji_list or list(KANSAI_DISTRICT_PREF_KAIJI)
+    warehouse = root / "data" / "warehouse" / "parquet" / "facts.parquet"
+    web = root / "web" / "data" / "facts.parquet"
+    if not warehouse.exists() and not web.exists():
+        raise FileNotFoundError("facts.parquet が見つかりません")
+    src = warehouse if warehouse.exists() else web
+
+    new_items: list[dict] = []
+    for kaiji in kaiji_list:
+        new_items.extend(parse_kansai_sangiin_district_pref_facts(root, kaiji))
+    if not new_items:
+        return {"added": 0, "kept": 0, "total": 0}
+
+    drop_codes = sorted({item["source_code"] for item in new_items})
+    tmp_new = warehouse.parent / "_kansai_district_pref.parquet"
+    # fact_row 形式へ
+    new_fact_dicts = [dict(zip(FACT_COLUMNS, fact_row(item))) for item in new_items]
+    write_parquet(new_fact_dicts, tmp_new)
+
+    con = duckdb.connect()
+    code_list = ", ".join("'" + c.replace("'", "''") + "'" for c in drop_codes)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE merged AS
+        SELECT * FROM read_parquet(?)
+        WHERE source_code IS NULL OR cast(source_code AS VARCHAR) NOT IN ({code_list})
+        """,
+        [str(src)],
+    )
+    kept = con.execute("SELECT count(*) FROM merged").fetchone()[0]
+    con.execute("INSERT INTO merged BY NAME SELECT * FROM read_parquet(?)", [str(tmp_new)])
+    total = con.execute("SELECT count(*) FROM merged").fetchone()[0]
+    warehouse.parent.mkdir(parents=True, exist_ok=True)
+    con.execute("COPY merged TO ? (FORMAT PARQUET, COMPRESSION ZSTD)", [str(warehouse)])
+    # coverage check
+    by_kaiji = con.execute("""
+        SELECT election_kaiji, count(*)
+        FROM merged
+        WHERE cast(source_code AS VARCHAR) LIKE 'kansai-district-pref-%'
+          AND contest='district' AND metric='candidate_votes'
+        GROUP BY 1 ORDER BY 1
+    """).fetchall()
+    con.close()
+    tmp_new.unlink(missing_ok=True)
+
+    web.parent.mkdir(parents=True, exist_ok=True)
+    web.write_bytes(warehouse.read_bytes())
+    result = {
+        "added": len(new_fact_dicts),
+        "kept": int(kept),
+        "total": int(total),
+        "by_kaiji": by_kaiji,
+        "path": str(warehouse),
+    }
+    print(result, flush=True)
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build municipality_facts.parquet from 03-14 workbooks")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--kaiji", type=int, nargs="*", default=list(range(45, 52)))
     parser.add_argument("--sangiin-kaiji", type=int, nargs="*", default=[], help="参院回次（例: 26）")
     parser.add_argument("--no-legacy", action="store_true", help="smd_municipality_votes.parquet を書かない")
+    parser.add_argument("--no-kansai-fill", action="store_true", help="関西大二次ソースによる穴埋めをしない")
+    parser.add_argument(
+        "--merge-kansai-gaps",
+        action="store_true",
+        help="既存 parquet に参21全面・参22広島など関西大穴埋めをマージ",
+    )
+    parser.add_argument(
+        "--merge-kansai-district-facts",
+        action="store_true",
+        help="関西大選挙区CSVを都道府県集計し、参院県区facts（21–23）をマージ",
+    )
     args = parser.parse_args(argv)
     root = args.project_root.resolve()
+    if args.merge_kansai_gaps:
+        merge_kansai_into_municipality_facts(root)
+        return 0
+    if args.merge_kansai_district_facts:
+        merge_kansai_district_pref_into_facts(root)
+        return 0
     build_municipality_facts(
         root,
         args.kaiji,
         sangiin_kaiji=args.sangiin_kaiji,
         write_legacy=not args.no_legacy,
+        kansai_fill=not args.no_kansai_fill,
     )
     return 0
 

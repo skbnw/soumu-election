@@ -1,3 +1,4 @@
+# v1.3.1: 03-13 旧Excel（当/落分割ヘッダ・性別列あり）に対応
 # v1.3.0: unclassified（03-11相当）都道府県×名簿候補者得票を追加
 # v1.2.0: 03-13 県区の定数（1人区等）を district_number に保存
 # v1.1.0: 03-05比例都道府県党派、03-09順位、03-10名簿、03-13選挙区候補者を追加
@@ -372,21 +373,48 @@ def parse_sangiin_pr_list_candidates(doc: dict[str, Any], sheet: dict[str, Any],
 
 
 def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any], table: list[list[Any]]) -> list[dict[str, Any]]:
-    """03-13 候補者別得票数（県区）。左右独立パネル。定数は district_number に格納（1人区=1）。"""
+    """03-13 候補者別得票数（県区）。左右独立パネル。定数は district_number に格納（1人区=1）。
+
+    対応レイアウト:
+    - 新: ヘッダ「当落」＋（氏名/年齢/党派/新現/職業/得票）
+    - 旧: ヘッダ「当」＋次行「落」、性別列あり（氏名/性別/年齢/党派/新現/職業/得票）
+    """
     from soumu_election.normalize import base, candidate_name, compact, number
 
     if not table:
         return []
-    header_index = next(
-        (i for i, row in enumerate(table) if sum(compact(v) == "当落" for v in row) >= 1),
-        None,
-    )
+
+    header_index = None
+    for i, row in enumerate(table):
+        if sum(compact(v) == "当落" for v in row) >= 1:
+            header_index = i
+            break
+        if i + 1 >= len(table):
+            continue
+        nxt = table[i + 1]
+        split_hits = 0
+        for col, value in enumerate(row):
+            if compact(value) != "当":
+                continue
+            if compact(nxt[col] if col < len(nxt) else None) == "落":
+                split_hits += 1
+        if split_hits >= 1:
+            header_index = i
+            break
     if header_index is None:
         return []
-    starts = [i for i, v in enumerate(table[header_index]) if compact(v) == "当落"] or [0, 7]
-    field_offsets = {
-        "name": 1, "age": 2, "party": 3, "status": 4, "occupation": 5, "votes": 6,
-    }
+
+    header = table[header_index]
+    starts = [i for i, v in enumerate(header) if compact(v) in {"当落", "当"}] or [0, 7]
+    has_gender = any(compact(v) == "性別" for v in header)
+    if has_gender:
+        field_offsets = {
+            "name": 1, "gender": 2, "age": 3, "party": 4, "status": 5, "occupation": 6, "votes": 7,
+        }
+    else:
+        field_offsets = {
+            "name": 1, "age": 2, "party": 3, "status": 4, "occupation": 5, "votes": 6,
+        }
 
     # panel -> (prefecture, seats, byelection_seats|None)
     district_by_panel: dict[int, tuple[str, int, int | None]] = {}
@@ -460,6 +488,12 @@ def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any]
                 "value": votes,
                 "unit": "votes",
             })
+            if "gender" in field_offsets:
+                gender = compact(row[start + field_offsets["gender"]] if start + field_offsets["gender"] < len(row) else None)
+                if gender in {"男", "男性"}:
+                    fact["gender"] = "male"
+                elif gender in {"女", "女性"}:
+                    fact["gender"] = "female"
             if byelection:
                 fact["row_variant"] = f"byelection_seats:{byelection}"
             output.append(fact)

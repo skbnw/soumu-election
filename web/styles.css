@@ -130,7 +130,7 @@ main { max-width: 1200px; margin: auto; padding: 0 24px; }
 
 .filters {
   display: grid;
-  grid-template-columns: 150px 160px 120px minmax(200px, 1fr) 110px;
+  grid-template-columns: 150px 160px 120px 110px minmax(200px, 1fr) 110px;
   gap: 12px;
   align-items: end;
   padding: 20px;
@@ -143,6 +143,9 @@ main { max-width: 1200px; margin: auto; padding: 0 24px; }
 .filters[data-tab="pr"] {
   grid-template-columns: 120px 110px 130px 140px 160px 110px;
 }
+.filters[data-tab="prlist"] {
+  grid-template-columns: 130px 130px 110px 160px minmax(180px, 1fr) 110px;
+}
 .filters[data-tab="turnout"] {
   grid-template-columns: 130px 130px 110px 150px 150px 110px;
 }
@@ -153,6 +156,7 @@ label[data-show] { display: none; }
 .filters[data-tab="smd"] label[data-show~="smd"],
 .filters[data-tab="muni"] label[data-show~="muni"],
 .filters[data-tab="pr"] label[data-show~="pr"],
+.filters[data-tab="prlist"] label[data-show~="prlist"],
 .filters[data-tab="turnout"] label[data-show~="turnout"],
 .filters[data-tab="judicial"] label[data-show~="judicial"] { display: grid; }
 .filters[data-tab="pr"][data-geolevel="national"] #prefecture-label,
@@ -161,6 +165,7 @@ label[data-show] { display: none; }
 .filters[data-tab="pr"][data-geolevel="list"] #pr-block-label { display: none; }
 .filters[data-tab="pr"] label.search-label { display: none; }
 .filters[data-tab="pr"][data-geolevel="list"] label.search-label { display: grid; }
+.filters[data-tab="prlist"][data-chamber="sangiin"] #pr-block-label { display: none; }
 
 label { display: grid; gap: 7px; color: #344054; font-size: 11px; font-weight: 700; }
 select, input, button { font: inherit; }
@@ -201,7 +206,9 @@ button:disabled { opacity: .45; cursor: wait; }
 table { width: 100%; border-collapse: collapse; background: white; font-size: 12px; white-space: nowrap; }
 th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid #e8ebef; }
 th { position: sticky; top: 0; background: var(--soft); color: #475467; font-size: 10px; letter-spacing: .04em; z-index: 1; }
-tbody tr:hover { background: #f8fafc; }
+tbody tr.row-band-alt { background: #f1f4f7; }
+tbody tr:hover,
+tbody tr.row-band-alt:hover { background: #e8eef4; }
 tbody tr:last-child td { border-bottom: 0; }
 .numeric { text-align: right; }
 td.numeric { font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -250,6 +257,7 @@ footer { display: flex; justify-content: space-between; padding: 24px max(24px, 
   .filters[data-tab="muni"],
   .filters[data-tab="turnout"],
   .filters[data-tab="judicial"],
+  .filters[data-tab="prlist"],
   .filters[data-tab="pr"] { grid-template-columns: 1fr 1fr; }
   .search-label, .filters button { grid-column: 1 / -1; }
 }
@@ -262,6 +270,7 @@ footer { display: flex; justify-content: space-between; padding: 24px max(24px, 
   .filters[data-tab="muni"],
   .filters[data-tab="turnout"],
   .filters[data-tab="judicial"],
+  .filters[data-tab="prlist"],
   .filters[data-tab="pr"] { grid-template-columns: 1fr; padding: 16px; }
   .search-label, .filters button { grid-column: auto; }
   .about { grid-template-columns: 1fr; gap: 22px; }

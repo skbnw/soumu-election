@@ -3,16 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="総務省の衆議院・参議院選挙結果を横断検索できるデータベース（β）です。">
-  <title>総務省選挙データ横断検索β</title>
+  <meta name="description" content="衆議院・参議院の国政選挙結果を横断検索できるデータベース（β）です。総務省資料を中心に、研究用二次ソースも一部接続しています。">
+  <title>国政選データ横断検索β</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="./styles.css?v=20260808m">
+  <link rel="stylesheet" href="./styles.css?v=20260809p">
 </head>
 <body>
   <header class="masthead">
-    <a class="brand" href="./" aria-label="総務省選挙データ横断検索β ホーム">
+    <a class="brand" href="./" aria-label="国政選データ横断検索β ホーム">
       <span class="brand-mark" aria-hidden="true">選</span>
-      <span>総務省選挙データ横断検索β</span>
+      <span>国政選データ横断検索β</span>
     </a>
     <div class="masthead-right">
       <time id="updated-at" class="updated-at" datetime="2026-08-08T10:40:05.614736+00:00">更新 2026-08-08 19:40:05</time>
@@ -35,9 +35,10 @@
         <div class="tabs" role="tablist" aria-label="検索の種類">
           <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="smd">小選挙区</button>
           <button type="button" class="tab" role="tab" aria-selected="false" data-tab="pr">比例代表</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="prlist">比例名簿</button>
           <button type="button" class="tab" role="tab" aria-selected="false" data-tab="turnout">投票・有権者</button>
           <button type="button" class="tab" role="tab" aria-selected="false" data-tab="judicial">国民審査</button>
-          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="muni">市区町村</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="muni">市町村（詳細）</button>
         </div>
         <p id="tab-note" class="tab-note"></p>
 
@@ -53,7 +54,7 @@
               <option value="list">名簿候補</option>
             </select>
           </label>
-          <label data-show="pr" id="pr-block-label">比例ブロック
+          <label data-show="pr prlist" id="pr-block-label">比例ブロック
             <select id="pr-block" disabled><option value="">すべて</option></select>
           </label>
           <label data-show="turnout">選挙区分
@@ -77,16 +78,23 @@
           <label data-show="smd muni">選挙区
             <select id="district" disabled><option value="">すべて</option></select>
           </label>
+          <label data-show="smd prlist" id="elected-label">当落
+            <select id="elected-filter" disabled>
+              <option value="">すべて</option>
+              <option value="won">当選</option>
+              <option value="lost">落選</option>
+            </select>
+          </label>
           <label data-show="muni">市区町村
             <select id="municipality" disabled><option value="">すべて</option></select>
           </label>
-          <label data-show="pr" id="pr-party-label">政党
+          <label data-show="pr prlist" id="pr-party-label">政党
             <select id="pr-party" disabled><option value="">すべて</option></select>
           </label>
           <label data-show="turnout judicial">指標
             <select id="metric" disabled></select>
           </label>
-          <label class="search-label" data-show="smd muni judicial pr">
+          <label class="search-label" data-show="smd muni judicial pr prlist">
             <span id="keyword-label">候補者名</span>
             <div class="search-wrap"><input id="keyword" type="search" placeholder="例：道下大樹" disabled></div>
           </label>
@@ -105,6 +113,7 @@
 
         <div class="table-bar">
           <p id="result-label">検索条件を選択してください</p>
+          <button id="download" class="text-button" type="button" disabled>CSVを保存 ↓</button>
         </div>
         <div class="table-shell">
           <table>
@@ -123,7 +132,7 @@
         <div class="under-construction">
           <p class="section-number">SANGIIN</p>
           <h2>参院選（第21〜27回）</h2>
-          <p>県区候補者・比例（政党／名簿個人名）・投票に加え、第22〜26回は市区町村別得票も検索できます（第21回・第22回広島は画像PDFのため未接続）。</p>
+          <p>県区候補者・比例（政党／名簿個人名）・投票に加え、第21〜26回は市区町村別得票も検索できます（第21回全市区町村・第22回の一部県は総務省画像PDFのため、関西大・参院選DBで補完）。</p>
           <p class="under-construction-meta">出典: <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin21/index.html" target="_blank" rel="noreferrer">第21回</a> / <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin22/index_1.html" target="_blank" rel="noreferrer">第22回</a> / <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin23/index.html" target="_blank" rel="noreferrer">第23回</a> / <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin24/index.html" target="_blank" rel="noreferrer">第24回</a> / <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin25/index.html" target="_blank" rel="noreferrer">第25回</a> / <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin26/index.html" target="_blank" rel="noreferrer">第26回</a> / <a href="https://www.soumu.go.jp/senkyo/senkyo_s/data/sangiin27/index.html" target="_blank" rel="noreferrer">第27回</a></p>
         </div>
       </div>
@@ -132,15 +141,17 @@
     <section class="about">
       <div><p class="section-number">ABOUT</p><h2>データについて</h2></div>
       <div class="about-copy">
-        <p>検索結果は選挙回・地域・候補者・政党などの条件で絞り込めます。分析用データには総務省資料への出典座標も保持していますが、画面の一覧には出典列を出していません。</p>
+        <p>検索結果は選挙回・地域・候補者・政党などの条件で絞り込み、表示条件に合う行をCSVとして保存できます（画面のページ件数に限らず全件）。CSVには出典（source_code / source）を含めます。画面の一覧では、比例名簿タブ以外は出典列を省略しています。</p>
         <p>人名は漢字表記を基本に表示し、読み仮名は検索時にも使えます。市区町村タブでは小選挙区・比例の市区町村別得票に加え、都道府県単位の有権者・投票と国民審査を参考表示します。</p>
-        <p>衆院選に加え、参院選（第21〜27回）の県区候補者・比例政党得票・投票データを同一リポジトリで公開しています。第22〜26回は市区町村別得票にも対応しています（第21回全市区町村・第22回広島は画像スキャンPDFのため未接続）。</p>
-        <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ず総務省の原資料も確認してください。</p>
+        <p>衆院の比例名簿は、読売新聞紙面の比例ブロック名簿記事を構造化した二次ソースです（衆44〜51回）。当落は紙面表記に合わせ「比当」（比例で当選）／「小当」（重複立候補で小選挙区当選）／「落」の3区分です。名簿順位・氏名・当選枠・重複区も原則として同一紙面記事由来で、出典は「読売紙面記事」と表示します。惜敗率は紙面に無い行が多く空欄になり得ます。紙面で比当が欠落している場合のみ、読売選挙CSVの比当表記で突合補完することがあり、その行は「読売紙面（比当突合）」になります。</p>
+        <p>参院の比例名簿は総務省の比例名簿登載者（全国の個人得票・当落）です。当落フィルタは当選／落選、出典は source_code（総務省 mic-* 等）を表示します。都道府県別の個人得票は比例代表タブの「名簿候補」側です。</p>
+        <p>衆院選に加え、参院選（第21〜27回）の県区候補者・比例政党得票・投票データを同一リポジトリで公開しています。第21〜26回は市区町村別得票にも対応しています。第21回全市区町村および第22回の一部県（青森・宮城・東京・神奈川・愛知・広島・香川・高知・鹿児島）は総務省公開が画像スキャンPDF等のため、関西大学名取研究室「参院選DB」（二次ソース）で補完しています（source_code が kansai-*）。参院県区の候補者別得票は第21〜23回を関西大DBの都道府県集計、第25・27回を総務省03-13で接続（第24・26回は手元に関西大選挙区CSVがなく未接続）。</p>
+        <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ず総務省の原資料（および読売紙面など一次資料）も確認してください。関西大データの利用・引用は提供者の案内に従ってください。</p>
       </div>
     </section>
   </main>
 
-  <footer><span>DATA FROM MINISTRY OF INTERNAL AFFAIRS AND COMMUNICATIONS</span><span>Built with DuckDB-Wasm</span></footer>
-  <script type="module" src="./app.js?v=20260809d"></script>
+  <footer><span>NATIONAL ELECTION RESULTS (MIC + RESEARCH SECONDARY SOURCES)</span><span>Built with DuckDB-Wasm</span></footer>
+  <script type="module" src="./app.js?v=20260809t"></script>
 </body>
 </html>
