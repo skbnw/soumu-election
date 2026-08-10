@@ -205,7 +205,8 @@ def add_alias(bucket: dict[tuple[str, str], dict], person_id: str, alias: str, s
 
 
 def load_kokkai() -> list[tuple[str, str, str]]:
-    out: list[tuple[str, str, str]] = []
+    raw_out: list[tuple[str, str, str]] = []
+    pid_to_kanji = defaultdict(set)
     for folder in (KOKKAI_ROOT / "shugiin", KOKKAI_ROOT / "sangiin"):
         if not folder.is_dir():
             continue
@@ -219,7 +220,15 @@ def load_kokkai() -> list[tuple[str, str, str]]:
                     pid = m.group(1).lower()
                     kanji = (row.get("zt5") or row.get("name") or "").strip()
                     kana = (row.get("zt4") or row.get("kana") or "").strip()
-                    out.append((pid, kanji, kana))
+                    if kanji:
+                        pid_to_kanji[pid].add(kanji)
+                    raw_out.append((pid, kanji, kana))
+    
+    bad_pids = {pid for pid, names in pid_to_kanji.items() if len(names) > 5}
+    if bad_pids:
+        print(f"WARNING: ignoring corrupted PIDs with too many names: {bad_pids}")
+        
+    out = [row for row in raw_out if row[0] not in bad_pids]
     return out
 
 
