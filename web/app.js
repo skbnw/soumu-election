@@ -1,5 +1,26 @@
 /*
  * 国政選データ横断検索β — DuckDB-Wasm 検索
+ * v2.10.8
+ * - 小選挙区／参院県区の相対得票率を、当落・キーワード適用前の全区得票で計算
+ * v2.10.7
+ * - 政党名の外側括弧（無所属）等を表示・フィルタで除去
+ * - 小選挙区／比例などタブ選択を衆院・参院と同様の黒反転に
+ * v2.10.6
+ * - 小選挙区に政党フィルタ（当落との併用可）。相対得票率は全区得票を分母に計算してから絞る
+ * - 比例の相対得票率が政党フィルタ後に100%になる不具合を修正（分母は全区／全市／全市政党）
+ * - 選挙回ラベルの数字を半角＋tabular-numsで桁揃え
+ * - 市区町村プルダウンを市→区→町→村、日本語ロケール順に
+ * v2.10.5
+ * - 参院候補者名を読売CD表記で表示（sangiin_yomi_name_map）
+ * - 参院タブでも出典列を表示
+ * v2.10.4
+ * - データソースのユーザー選択を保持し、既定は常に「01 統合」へ復帰
+ * - 出典ラベルに読売CD-ROM（参24・26県区）を追加
+ * v2.10.3
+ * - 比例の政党フィルタを CASE 展開に変更（Wasm 相関サブクエリ回避）
+ * - 比例ブロック／全国の結果ソートで BigInt 減算エラーを修正
+ * v2.10.2
+ * - 政党名別名マップ（MIC正式名↔政治学会略称）を比例フィルタ・表示に接続
  * v2.10.1
  * - データソース表記を 01統合 / 02総務省 / 03政治学会 に整理
  * - 統合・比例の検索失敗を修正（MICブロックは03-10、UNION明示列）
@@ -87,6 +108,10 @@ const state = {
   hasSeijiPr: false,
   hasSeijiPrMuni: false,
   hasSeijiNameMap: false,
+  hasSangiinYomiNameMap: false,
+  hasPartyAliases: false,
+  partyAliasGlobal: {},
+  partyAliasByKaiji: {},
   seijiDistrictsByPref: {},
   seijiMuniDistrictsByPref: {},
   seijiPrefectures: [],
@@ -97,7 +122,11 @@ const state = {
   seijiMuniElections: [],
   seijiTurnoutElections: [],
   seijiPrElections: [],
-  partiesByElectionSeiji: {}
+  partiesByElectionSeiji: {},
+  partiesByElectionSmd: {},
+  partiesByElectionSeijiSmd: {},
+  /** ユーザーが選んだデータソース（政治学会非対応タブでは一時的に mic 表示しても保持） */
+  dataSourcePreference: 'unified'
 };
 
 const els = {
@@ -176,6 +205,9 @@ function usesUnifiedSource() {
 }
 
 function showsSourceColumn() {
+  if (state.chamber === 'sangiin') {
+    return ['smd', 'muni', 'pr', 'prlist', 'turnout'].includes(state.tab);
+  }
   return usesSeijiSource() || usesUnifiedSource();
 }
 
@@ -184,10 +216,91 @@ function electionLabelForUi(kaiji, chamber = state.chamber) {
   return electionLabel(kaiji, chamber);
 }
 
-function partyFilterSql(column = 'party') {
-  const raw = String(els.prParty?.value ?? '').trim();
+function partyCanonicalSqlExpr(column = 'party', kaijiColumn = 'election_kaiji') {
+  if (!state.hasPartyAliases) return column;
+
+  // 回別 override
+  const byKaiji = {};
+  for (const [key, canon] of Object.entries(state.partyAliasByKaiji || {})) {
+    const split = key.indexOf('|');
+    if (split < 0) continue;
+    const k = key.slice(0, split);
+    const alias = key.slice(split + 1);
+    if (!byKaiji[k]) byKaiji[k] = [];
+    byKaiji[k].push([alias, canon]);
+  }
+  let kaijiCase = 'NULL';
+  const kaijiKeys = Object.keys(byKaiji);
+  if (kaijiKeys.length) {
+    const whens = kaijiKeys.map((k) => {
+      const inner = byKaiji[k]
+        .map(([alias, canon]) => `WHEN '${escapeSql(alias)}' THEN '${escapeSql(canon)}'`)
+        .join(' ');
+      return `WHEN ${Number(k)} THEN (CASE ${column} ${inner} ELSE NULL END)`;
+    }).join(' ');
+    kaijiCase = `CASE ${kaijiColumn} ${whens} ELSE NULL END`;
+  }
+
+  const globalEntries = Object.entries(state.partyAliasGlobal || {});
+  const globalCase = globalEntries.length
+    ? `(CASE ${column} ${globalEntries
+      .map(([alias, canon]) => `WHEN '${escapeSql(alias)}' THEN '${escapeSql(canon)}'`)
+      .join(' ')} ELSE NULL END)`
+    : 'NULL';
+
+  return `coalesce(${kaijiCase}, ${globalCase}, ${column})`;
+}
+
+function stripOuterPartyParens(value) {
+  let s = String(value ?? '').trim();
+  if (!s) return '';
+  // 全体が（…）/ (...) で囲まれているケースを外す（例: （無所属）→無所属）
+  for (let i = 0; i < 3; i += 1) {
+    if ((s.startsWith('（') && s.endsWith('）')) || (s.startsWith('(') && s.endsWith(')'))) {
+      s = s.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  if (s.startsWith('（') || s.startsWith('(')) s = s.slice(1).trim();
+  if (s.endsWith('）') || s.endsWith(')')) s = s.slice(0, -1).trim();
+  return s;
+}
+
+function partyFilterSql(column = 'party', kaijiColumn = 'election_kaiji') {
+  const raw = stripOuterPartyParens(String(els.prParty?.value ?? '').trim());
   if (!raw || raw === 'すべて') return '';
-  return `AND ${column} = '${escapeSql(raw)}'`;
+  const esc = escapeSql(raw);
+  const baseExpr = state.hasPartyAliases
+    ? partyCanonicalSqlExpr(column, kaijiColumn)
+    : column;
+  // 表示は括弧なし。データ側の（無所属）等も同一視する
+  const stripped = `regexp_replace(regexp_replace(CAST(${baseExpr} AS VARCHAR), '^[（(]+', ''), '[）)]+$', '')`;
+  return `AND ${stripped} = '${esc}'`;
+}
+
+function canonicalPartyName(party, kaiji = null) {
+  const name = stripOuterPartyParens(String(party ?? '').trim());
+  if (!name) return '';
+  if (!state.hasPartyAliases) return name;
+  // 別名表は括弧付きキーの可能性があるため両方見る
+  const wrapped = `（${name}）`;
+  if (kaiji != null && kaiji !== '') {
+    const k = Number(kaiji);
+    const keyed = state.partyAliasByKaiji[`${k}|${name}`]
+      || state.partyAliasByKaiji[`${k}|${wrapped}`]
+      || state.partyAliasByKaiji[`${k}|(${name})`];
+    if (keyed) return stripOuterPartyParens(keyed);
+  }
+  const global = state.partyAliasGlobal[name]
+    || state.partyAliasGlobal[wrapped]
+    || state.partyAliasGlobal[`(${name})`];
+  return stripOuterPartyParens(global || name);
+}
+
+function displayPartyName(party, kaiji = null) {
+  const canon = canonicalPartyName(party, kaiji);
+  return canon ? displayLabel(canon) : '—';
 }
 
 function normalizeSeijiPrGeoLevel() {
@@ -214,6 +327,35 @@ function seijiDisplayCandidateSql(alias = 's') {
     : `${alias}.candidate`;
 }
 
+/** 参院・読売CD名マップ（県計） */
+function sangiinYomiPrefJoinSql(alias = 'f') {
+  if (!state.hasSangiinYomiNameMap) return '';
+  return `LEFT JOIN read_parquet('sangiin_yomi_name_map.parquet') ym
+    ON ym.grain = 'prefecture'
+    AND ym.election_kaiji = ${alias}.election_kaiji
+    AND ym.prefecture = ${alias}.prefecture
+    AND ym.vote = CAST(${alias}.value AS BIGINT)`;
+}
+
+/** 参院・読売CD名マップ（市区町村） */
+function sangiinYomiMuniJoinSql(alias = 'm') {
+  if (!state.hasSangiinYomiNameMap) return '';
+  return `LEFT JOIN read_parquet('sangiin_yomi_name_map.parquet') ym
+    ON ym.grain = 'municipality'
+    AND ym.election_kaiji = ${alias}.election_kaiji
+    AND ym.prefecture = ${alias}.prefecture
+    AND ym.municipality = ${alias}.municipality
+    AND ym.vote = CAST(${alias}.value AS BIGINT)`;
+}
+
+function displayNameFromRow(row) {
+  return displayPersonName(
+    row.candidate ?? row.subject,
+    row.candidate_raw,
+    row.yomi_name || row.canonical_name
+  );
+}
+
 function dualCandidacyLabel(value) {
   if (value === true || value === 'true') return 'あり';
   if (value === false || value === 'false') return 'なし';
@@ -224,9 +366,14 @@ function syncDataSourceUi() {
   const sourceWrap = els.dataSource?.closest('label') || document.getElementById('data-source-label');
   const canSeiji = canUseSeijiForTab();
   if (sourceWrap) sourceWrap.hidden = !canSeiji;
-  if (!canSeiji && els.dataSource) els.dataSource.value = 'mic';
-  if (canSeiji && els.dataSource && !['unified', 'mic', 'seiji-gakkai'].includes(els.dataSource.value)) {
-    els.dataSource.value = 'unified';
+  if (els.dataSource) {
+    if (!canSeiji) {
+      // 参院・国民審査など政治学会非対応時は表示のみ総務省（選択は保持）
+      els.dataSource.value = 'mic';
+    } else {
+      const pref = state.dataSourcePreference;
+      els.dataSource.value = ['unified', 'mic', 'seiji-gakkai'].includes(pref) ? pref : 'unified';
+    }
   }
 
   const electedWrap = els.electedFilter?.closest('label') || document.getElementById('elected-label');
@@ -284,6 +431,7 @@ function sourceLabel(source) {
   if (s === 'yomi_print_article') return '読売紙面記事';
   if (s === 'print_hitou_crossfill' || s.startsWith('print_clean_csv')) return '読売紙面（比当突合）';
   if (s.startsWith('kansai-')) return `関西大DB (${s})`;
+  if (s.startsWith('yomi-cdrom-')) return `読売CD-ROM (${s})`;
   if (s.startsWith('seiji-gakkai-')) return `政治学会 (${s})`;
   if (s.startsWith('mic-') || s.startsWith('soumu-')) return `総務省 (${s})`;
   return s;
@@ -570,7 +718,9 @@ const electionLabel = (kaiji, chamber = DEFAULT_CHAMBER) => {
   const key = chamberKey(chamber);
   const mark = CHAMBER_MARK[key] || '衆';
   const n = Number(kaiji);
-  const year = ELECTION_YEARS[key]?.[n];
+  // 年・回次は半角数字に統一（表示の桁ずれ防止）
+  const yearRaw = ELECTION_YEARS[key]?.[n];
+  const year = yearRaw == null ? null : String(yearRaw).replace(/[０-９]/g, (d) => '０１２３４５６７８９'.indexOf(d));
   const pm = ELECTION_PM[key]?.[n]?.label;
   const body = `${mark}${n}回`;
   const withYear = year == null ? body : `${year}-${body}`;
@@ -640,7 +790,7 @@ const TABS = {
   },
   pr: {
     title: '比例代表',
-    note: '政党は全国得票の多い順です。集計単位で都道府県・ブロック・全国を切り替えられます。名簿そのものは「比例名簿」タブです。',
+    note: '政党は全国得票の多い順です。集計単位で全国・ブロック・都道府県を切り替えられます。名簿そのものは「比例名簿」タブです。',
     keywordLabel: '',
     keywordPlaceholder: '',
     metrics: [{ value: 'party_votes', label: '政党得票' }],
@@ -718,7 +868,8 @@ function prHeaders() {
       : ['選挙', '政党', '候補者', '当落', '得票', '単位'];
   }
   if (state.chamber === 'sangiin') {
-    return ['選挙', '都道府県', '政党', '得票', '相対得票率', '絶対得票率'];
+    const base = ['選挙', '都道府県', '政党', '得票', '相対得票率', '絶対得票率'];
+    return showsSourceColumn() ? [...base, '出典'] : base;
   }
   return ['選挙', '比例ブロック', '都道府県', '政党', '得票', '相対得票率', '絶対得票率'];
 }
@@ -726,7 +877,9 @@ function prHeaders() {
 function currentHeaders() {
   if (state.tab === 'smd') {
     if (state.chamber === 'sangiin') {
-      return ['選挙', '県区', '定数', '候補者', '党派', '当落', '得票', '相対得票率', '絶対得票率'];
+      return showsSourceColumn()
+        ? ['選挙', '県区', '定数', '候補者', '党派', '当落', '得票', '相対得票率', '絶対得票率', '出典']
+        : ['選挙', '県区', '定数', '候補者', '党派', '当落', '得票', '相対得票率', '絶対得票率'];
     }
     if (showsSourceColumn()) {
       return ['選挙', '都道府県', '選挙区', '候補者', '党派', '当落', '得票', '相対得票率', '絶対得票率', '惜敗率', '出典'];
@@ -894,7 +1047,7 @@ async function refreshMunicipalityOptions() {
       SELECT DISTINCT municipality FROM (${unions.join(' UNION ')})
       ORDER BY municipality`);
     const names = result.toArray().map((row) => String(row.toJSON().municipality));
-    fillSelect(els.municipality, names.map((name) => ({ value: name, label: name })));
+    fillSelect(els.municipality, sortMunicipalities(names).map((name) => ({ value: name, label: name })));
   } catch (error) {
     console.error(error);
     fillSelect(els.municipality, []);
@@ -928,22 +1081,42 @@ function refreshPrefectureOptions() {
   fillSelect(els.prefecture, (names ?? []).map((v) => ({ value: v, label: v })));
 }
 
+function municipalitySortKey(name) {
+  const n = String(name || '');
+  let type = 5;
+  if (n.endsWith('市') && !n.includes('（')) type = 0;
+  else if (n.endsWith('区')) type = 1;
+  else if (n.endsWith('町')) type = 2;
+  else if (n.endsWith('村')) type = 3;
+  if (n.includes('振興局') || n.endsWith('計') || n.includes('合計') || /（\d+区）/.test(n)) type = 9;
+  return type;
+}
+
+function sortMunicipalities(names) {
+  return [...names].sort((a, b) => {
+    const ta = municipalitySortKey(a);
+    const tb = municipalitySortKey(b);
+    return ta - tb || String(a).localeCompare(String(b), 'ja');
+  });
+}
+
 function refreshPartyOptions() {
   if (!els.prParty) return;
   const kaiji = els.election.value ? Number(els.election.value) : null;
   const useYomi = state.tab === 'prlist' && state.chamber === 'shugiin' && state.hasYomiPrMeibo;
-  const useSeiji = usesSeijiSource() && state.tab === 'pr';
-  const useUnified = usesUnifiedSource() && state.tab === 'pr';
-  const micStore = state.partiesByElection || {};
-  const seijiStore = state.partiesByElectionSeiji || {};
+  const useSmd = state.tab === 'smd';
+  const useSeiji = usesSeijiSource() && (state.tab === 'pr' || state.tab === 'smd');
+  const useUnified = usesUnifiedSource() && (state.tab === 'pr' || state.tab === 'smd');
+  const micStore = useSmd ? (state.partiesByElectionSmd || {}) : (state.partiesByElection || {});
+  const seijiStore = useSmd ? (state.partiesByElectionSeijiSmd || {}) : (state.partiesByElectionSeiji || {});
   const store = useYomi
     ? (state.partiesByElectionYomi || {})
     : (useSeiji ? seijiStore : micStore);
-  let parties = [];
+  let rawParties = [];
   const pushFrom = (src, key) => {
     const list = src[key] ?? [];
     for (const name of list) {
-      if (!parties.includes(name)) parties.push(name);
+      if (!rawParties.includes(name)) rawParties.push(name);
     }
   };
   if (kaiji != null) {
@@ -952,23 +1125,33 @@ function refreshPartyOptions() {
       pushFrom(micStore, eid);
       pushFrom(micStore, kaiji);
       pushFrom(seijiStore, eid);
+      pushFrom(seijiStore, kaiji);
     } else {
-      parties = store[eid]
+      rawParties = store[eid]
         ?? (state.chamber === 'shugiin' && !useYomi ? store[kaiji] : null)
         ?? [];
     }
   } else {
-    const elections = useSeiji
-      ? (state.seijiPrElections ?? [])
-      : useUnified
-        ? [...new Set([
-          ...(state.electionsByChamber?.[state.chamber]?.pr ?? state.electionsByTab.pr ?? []),
-          ...(state.seijiPrElections ?? [])
-        ])].sort((a, b) => b - a)
-      : (state.electionsByChamber?.[state.chamber]?.[useYomi ? 'prlist' : 'pr']
-        ?? state.electionsByTab[useYomi ? 'prlist' : 'pr']
-        ?? []);
-    const seen = new Set();
+    const elections = useSmd
+      ? (useSeiji
+        ? (state.seijiSmdElections ?? [])
+        : useUnified
+          ? [...new Set([
+            ...(state.electionsByChamber?.[state.chamber]?.smd ?? state.electionsByTab.smd ?? []),
+            ...(state.seijiSmdElections ?? [])
+          ])].sort((a, b) => b - a)
+          : (state.electionsByChamber?.[state.chamber]?.smd ?? state.electionsByTab.smd ?? []))
+      : (useSeiji
+        ? (state.seijiPrElections ?? [])
+        : useUnified
+          ? [...new Set([
+            ...(state.electionsByChamber?.[state.chamber]?.pr ?? state.electionsByTab.pr ?? []),
+            ...(state.seijiPrElections ?? [])
+          ])].sort((a, b) => b - a)
+          : (state.electionsByChamber?.[state.chamber]?.[useYomi ? 'prlist' : 'pr']
+            ?? state.electionsByTab[useYomi ? 'prlist' : 'pr']
+            ?? []));
+    const seenRaw = new Set();
     for (const k of elections) {
       const keys = [`${chamberPrefix()}${k}`];
       if (state.chamber === 'shugiin' && !useYomi) keys.push(k);
@@ -978,14 +1161,24 @@ function refreshPartyOptions() {
           : [store[key] || []];
         for (const list of lists) {
           for (const name of list) {
-            if (!seen.has(name)) {
-              seen.add(name);
-              parties.push(name);
+            if (!seenRaw.has(name)) {
+              seenRaw.add(name);
+              rawParties.push(name);
             }
           }
         }
       }
     }
+  }
+
+  // プルダウンは正本名にそろえる（略称はフィルタ展開で拾う）。外側括弧は外す
+  const seenCanon = new Set();
+  const parties = [];
+  for (const name of rawParties) {
+    const canon = stripOuterPartyParens(useYomi ? name : canonicalPartyName(name, kaiji));
+    if (!canon || seenCanon.has(canon)) continue;
+    seenCanon.add(canon);
+    parties.push(canon);
   }
   fillSelect(els.prParty, parties.map((name) => ({ value: name, label: name })));
 }
@@ -1155,7 +1348,7 @@ function applyTab(tabId, { search = false } = {}) {
   } else if (tabId === 'turnout' && state.chamber === 'sangiin') {
     els.tabNote.textContent = '参院の都道府県単位の有権者数・投票者数・投票率です。選挙区／比例を切り替えられます。';
   } else if (tabId === 'smd' && state.chamber === 'sangiin') {
-    els.tabNote.textContent = '参院の県区（都道府県・合区）候補者得票です。定数・当落で絞り込めます。';
+    els.tabNote.textContent = '参院の県区（都道府県・合区）候補者得票です。候補者名は得票一致の範囲で読売CD表記を優先し、出典列で MIC／関西大／読売CD を区別します。';
   } else if (tabId === 'muni' && state.chamber === 'sangiin') {
     els.tabNote.textContent = '参院第25・26回などの市区町村別得票です。選挙区候補者・比例政党・比例名簿候補者を横断検索できます。';
   } else if (usesSeijiSource() && tabId === 'smd') {
@@ -1288,25 +1481,42 @@ function whereClauseSeijiMuni() {
   return parts.join(' AND ') || '1=1';
 }
 
-function whereClauseSmd() {
+function whereClauseSmdBase() {
   const contest = state.chamber === 'sangiin' ? 'district' : 'smd';
-  const parts = [
+  return [
     chamberSql(),
     `metric = 'candidate_votes'`,
     `contest = '${contest}'`,
     ...commonFilters({ includePref: true, includeDistrict: true })
-  ];
-  if (els.electedFilter?.value === 'won') parts.push(`elected = true`);
-  else if (els.electedFilter?.value === 'lost') parts.push(`elected = false`);
+  ].join(' AND ');
+}
+
+/** 相対得票率の外側で適用（当選のみ等で分母が壊れないようにする） */
+function smdResultFilterSql(alias = '') {
+  const p = alias ? `${alias}.` : '';
+  const parts = [];
+  if (els.electedFilter?.value === 'won') parts.push(`${p}elected = true`);
+  else if (els.electedFilter?.value === 'lost') parts.push(`${p}elected = false`);
   if (els.keyword.value.trim()) {
+    const cand = `${p}candidate`;
+    const raw = `${p}candidate_raw`;
     const partsKeyword = [
-      keywordCompactSql('candidate'),
-      keywordCompactSql('candidate_raw'),
-      keywordCompactSql('party'),
-      keywordPersonAliasSql('candidate', 'candidate_raw')
+      keywordCompactSql(cand),
+      keywordCompactSql(raw),
+      keywordCompactSql(`${p}party`),
+      keywordPersonAliasSql(cand, raw)
     ].filter(Boolean);
-    parts.push(`(${partsKeyword.join(' OR ')})`);
+    if (partsKeyword.length) parts.push(`(${partsKeyword.join(' OR ')})`);
   }
+  if (!parts.length) return '';
+  return `AND ${parts.join(' AND ')}`;
+}
+
+function whereClauseSmd() {
+  // 互換: 旧呼び出し向け。相対得票率を含む検索では whereClauseSmdBase + smdResultFilterSql を使う
+  const parts = [whereClauseSmdBase()];
+  const extra = smdResultFilterSql().replace(/^AND\s+/, '');
+  if (extra) parts.push(extra);
   return parts.join(' AND ');
 }
 
@@ -1375,6 +1585,8 @@ function whereClauseJudicial() {
 
 function selectSql() {
   if (state.tab === 'smd') {
+    const partyFilter = partyFilterSql('party', 'election_kaiji');
+    const resultFilter = smdResultFilterSql();
     if (usesSeijiSource() || usesUnifiedSource()) {
       const candExpr = seijiDisplayCandidateSql('s');
       const seijiSelect = `
@@ -1407,9 +1619,11 @@ function selectSql() {
         WHERE ${whereClauseSeijiSmd('s')}`;
 
       if (usesSeijiSource()) {
-        return `${seijiSelect}
-        ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, district_number NULLS LAST, value DESC NULLS LAST
-        ${limitOffsetSql()}`;
+        return `
+          SELECT * FROM (${seijiSelect}) scored
+          WHERE 1=1 ${resultFilter} ${partyFilter}
+          ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, district_number NULLS LAST, value DESC NULLS LAST
+          ${limitOffsetSql()}`;
       }
 
       // 統合: MIC 優先。同一(回・県・区)に MIC があれば政治学会は出さない
@@ -1450,7 +1664,7 @@ function selectSql() {
             ) AS sekihai_rate,
             gender,
             elected
-          FROM read_parquet('facts.parquet') WHERE ${whereClauseSmd()}
+          FROM read_parquet('facts.parquet') WHERE ${whereClauseSmdBase()}
         ),
         seiji AS (
           ${seijiSelect}
@@ -1460,8 +1674,8 @@ function selectSql() {
                 AND m.prefecture = s.prefecture
                 AND m.district_number = s.district_number
             )
-        )
-        SELECT * FROM (
+        ),
+        combined AS (
           SELECT election_kaiji, prefecture, prefecture_code, district_number,
                  candidate, candidate_raw, party, dual_candidacy, value, unit, source_code,
                  outcome, outcome_label, elected_smd, is_pr_winner, vote_rank, sekihairitsu,
@@ -1474,17 +1688,25 @@ function selectSql() {
                  canonical_name, relative_share, absolute_share, sekihai_rate, gender, elected
           FROM seiji
         )
+        SELECT * FROM combined
+        WHERE 1=1 ${resultFilter} ${partyFilter}
         ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, district_number NULLS LAST, value DESC NULLS LAST
         ${limitOffsetSql()}`;
     }
     if (state.chamber === 'sangiin') {
+      const yomiName = state.hasSangiinYomiNameMap ? 'ym.yomi_name' : 'NULL::VARCHAR';
       return `
-        WITH cand AS (
-          SELECT election_kaiji, prefecture, prefecture_code, district_number,
-            candidate, candidate_raw, party, value, unit, source_code, elected, row_variant,
-            ${personCanonicalJoinSql('candidate')}
-          FROM read_parquet('facts.parquet')
-          WHERE ${whereClauseSmd()}
+        WITH base AS (
+          SELECT * FROM read_parquet('facts.parquet')
+          WHERE ${whereClauseSmdBase()}
+        ),
+        cand AS (
+          SELECT b.election_kaiji, b.prefecture, b.prefecture_code, b.district_number,
+            b.candidate, b.candidate_raw, b.party, b.value, b.unit, b.source_code, b.elected, b.row_variant,
+            ${yomiName} AS yomi_name,
+            ${personCanonicalJoinSql('b.candidate')}
+          FROM base b
+          ${sangiinYomiPrefJoinSql('b')}
         ),
         eligible AS (
           SELECT election_kaiji, prefecture, max(value) AS eligible_voters
@@ -1494,45 +1716,54 @@ function selectSql() {
             AND gender = 'total' AND (scope = 'all' OR scope IS NULL)
             AND prefecture IS NOT NULL
           GROUP BY election_kaiji, prefecture
+        ),
+        scored AS (
+          SELECT c.*,
+            CASE WHEN sum(c.value) OVER (PARTITION BY c.election_kaiji, c.prefecture) > 0
+              THEN 100.0 * c.value / sum(c.value) OVER (PARTITION BY c.election_kaiji, c.prefecture)
+              ELSE NULL END AS relative_share,
+            CASE WHEN e.eligible_voters > 0
+              THEN 100.0 * c.value / e.eligible_voters
+              ELSE NULL END AS absolute_share
+          FROM cand c
+          LEFT JOIN eligible e
+            ON c.election_kaiji = e.election_kaiji AND c.prefecture = e.prefecture
         )
-        SELECT c.*,
-          CASE WHEN sum(c.value) OVER (PARTITION BY c.election_kaiji, c.prefecture) > 0
-            THEN 100.0 * c.value / sum(c.value) OVER (PARTITION BY c.election_kaiji, c.prefecture)
-            ELSE NULL END AS relative_share,
-          CASE WHEN e.eligible_voters > 0
-            THEN 100.0 * c.value / e.eligible_voters
-            ELSE NULL END AS absolute_share
-        FROM cand c
-        LEFT JOIN eligible e
-          ON c.election_kaiji = e.election_kaiji AND c.prefecture = e.prefecture
-        ORDER BY c.election_kaiji DESC, c.district_number NULLS LAST, c.prefecture_code NULLS LAST, c.value DESC NULLS LAST
+        SELECT * FROM scored
+        WHERE 1=1 ${resultFilter} ${partyFilter}
+        ORDER BY election_kaiji DESC, district_number NULLS LAST, prefecture_code NULLS LAST, value DESC NULLS LAST
         ${limitOffsetSql()}`;
     }
-    return `SELECT election_kaiji, prefecture, prefecture_code, district_number,
-      candidate, candidate_raw, party, gender, elected, value, unit, source_code,
-      ${personCanonicalJoinSql('candidate')},
-      CASE
-        WHEN sum(value) OVER (
-          PARTITION BY election_kaiji, prefecture, district_number
-        ) > 0
-        THEN 100.0 * value / sum(value) OVER (
-          PARTITION BY election_kaiji, prefecture, district_number
-        )
-        ELSE NULL
-      END AS relative_share,
-      coalesce(
-        sekihairitsu,
-        CASE
-          WHEN max(CASE WHEN elected THEN value END) OVER (
-            PARTITION BY election_kaiji, prefecture, district_number
-          ) > 0
-          THEN 100.0 * value / max(CASE WHEN elected THEN value END) OVER (
-            PARTITION BY election_kaiji, prefecture, district_number
-          )
-          ELSE NULL
-        END
-      ) AS sekihai_rate
-      FROM read_parquet('facts.parquet') WHERE ${whereClauseSmd()}
+    return `
+      WITH scored AS (
+        SELECT election_kaiji, prefecture, prefecture_code, district_number,
+          candidate, candidate_raw, party, gender, elected, value, unit, source_code,
+          ${personCanonicalJoinSql('candidate')},
+          CASE
+            WHEN sum(value) OVER (
+              PARTITION BY election_kaiji, prefecture, district_number
+            ) > 0
+            THEN 100.0 * value / sum(value) OVER (
+              PARTITION BY election_kaiji, prefecture, district_number
+            )
+            ELSE NULL
+          END AS relative_share,
+          coalesce(
+            sekihairitsu,
+            CASE
+              WHEN max(CASE WHEN elected THEN value END) OVER (
+                PARTITION BY election_kaiji, prefecture, district_number
+              ) > 0
+              THEN 100.0 * value / max(CASE WHEN elected THEN value END) OVER (
+                PARTITION BY election_kaiji, prefecture, district_number
+              )
+              ELSE NULL
+            END
+          ) AS sekihai_rate
+          FROM read_parquet('facts.parquet') WHERE ${whereClauseSmdBase()}
+      )
+      SELECT * FROM scored
+      WHERE 1=1 ${resultFilter} ${partyFilter}
       ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, district_number NULLS LAST, value DESC NULLS LAST
       ${limitOffsetSql()}`;
   }
@@ -1735,29 +1966,38 @@ function selectSql() {
     const districtCat = state.chamber === 'sangiin' ? '選挙区' : '小選挙区';
     const turnoutContest = state.chamber === 'sangiin' ? 'district' : 'smd';
     const showPrefRelated = state.chamber === 'shugiin';
+    const yomiJoin = state.chamber === 'sangiin' ? sangiinYomiMuniJoinSql('m') : '';
+    const subjectExpr = (state.chamber === 'sangiin' && state.hasSangiinYomiNameMap)
+      ? 'coalesce(ym.yomi_name, m.subject)'
+      : 'm.subject';
     return `
-      WITH muni_rows AS (
-        SELECT election_kaiji, category, prefecture, prefecture_code, district_number,
-               municipality, subject, party, value, unit, grain, source_code,
+      WITH muni_base AS (
+        SELECT *
+        FROM read_parquet('municipality_facts.parquet')
+        WHERE ${core || '1=1'}
+          AND (category = '比例代表' OR (category = '${districtCat}'${smdExtra}))
+      ),
+      muni_rows AS (
+        SELECT m.election_kaiji, m.category, m.prefecture, m.prefecture_code, m.district_number,
+               m.municipality, ${subjectExpr} AS subject, m.party, m.value, m.unit, m.grain, m.source_code,
                CASE
-                 WHEN category IN ('小選挙区', '選挙区', '比例代表')
-                   AND sum(value) OVER (
-                     PARTITION BY election_kaiji, category, prefecture, municipality, metric
+                 WHEN m.category IN ('小選挙区', '選挙区', '比例代表')
+                   AND sum(m.value) OVER (
+                     PARTITION BY m.election_kaiji, m.category, m.prefecture, m.municipality, m.metric
                    ) > 0
-                 THEN 100.0 * value / sum(value) OVER (
-                   PARTITION BY election_kaiji, category, prefecture, municipality, metric
+                 THEN 100.0 * m.value / sum(m.value) OVER (
+                   PARTITION BY m.election_kaiji, m.category, m.prefecture, m.municipality, m.metric
                  )
                  ELSE NULL
                END AS relative_share,
-               CASE category
+               CASE m.category
                  WHEN '小選挙区' THEN 0
                  WHEN '選挙区' THEN 0
                  WHEN '比例代表' THEN 1
                  ELSE 9
                END AS category_rank
-        FROM read_parquet('municipality_facts.parquet')
-        WHERE ${core || '1=1'}
-          AND (category = '比例代表' OR (category = '${districtCat}'${smdExtra}))
+        FROM muni_base m
+        ${yomiJoin}
       ),
       pref_turnout AS (
         SELECT election_kaiji,
@@ -1850,7 +2090,8 @@ function selectSql() {
       const seijiBlockFilter = els.prBlock.value
         ? `AND pr_block = '${escapeSql(els.prBlock.value)}'`
         : '';
-      const seijiNational = `
+      // 相対得票率は全区政党で計算し、政党フィルタは外側で適用する
+      const seijiNationalInner = `
           SELECT election_kaiji, '全国' AS pr_block, party, value, unit, source_code,
             CASE WHEN sum(value) OVER (PARTITION BY election_kaiji) > 0
               THEN 100.0 * value / sum(value) OVER (PARTITION BY election_kaiji)
@@ -1858,8 +2099,8 @@ function selectSql() {
             NULL::DOUBLE AS absolute_share
           FROM read_parquet('seiji_gakkai_pr_votes.parquet')
           WHERE metric = 'party_votes' AND geo_level = 'national'
-            ${electionFilter} ${partyNotTotal} ${partyFilter}`;
-      const seijiBlock = `
+            ${electionFilter} ${partyNotTotal}`;
+      const seijiBlockInner = `
         SELECT election_kaiji, pr_block, party, value, unit, source_code,
           CASE WHEN sum(value) OVER (PARTITION BY election_kaiji, pr_block) > 0
             THEN 100.0 * value / sum(value) OVER (PARTITION BY election_kaiji, pr_block)
@@ -1869,15 +2110,19 @@ function selectSql() {
             ELSE NULL END AS absolute_share
         FROM read_parquet('seiji_gakkai_pr_votes.parquet')
         WHERE metric = 'party_votes' AND geo_level = 'block'
-          ${electionFilter} ${seijiBlockFilter} ${partyNotTotal} ${partyFilter}`;
+          ${electionFilter} ${seijiBlockFilter} ${partyNotTotal}`;
 
       if (usesSeijiSource()) {
         if (geo === 'national') {
-          return `${seijiNational}
+          return `
+          SELECT * FROM (${seijiNationalInner}) scored
+          WHERE 1=1 ${partyFilter}
           ORDER BY election_kaiji DESC, value DESC NULLS LAST, party
           ${limitOffsetSql()}`;
         }
-        return `${seijiBlock}
+        return `
+        SELECT * FROM (${seijiBlockInner}) scored
+        WHERE 1=1 ${partyFilter}
         ORDER BY election_kaiji DESC, pr_block, value DESC NULLS LAST, party
         ${limitOffsetSql()}`;
       }
@@ -1894,16 +2139,20 @@ function selectSql() {
             FROM read_parquet('facts.parquet')
             WHERE ${chamberSql()}
               AND metric = 'current_votes' AND contest = 'pr' AND source_code = '03-05'
-              ${partyNotTotal} ${electionFilter} ${partyFilter}
+              ${partyNotTotal} ${electionFilter}
               AND coalesce(party, '') NOT IN ('合計', '計', '諸派')
           ),
           seiji AS (
-            ${seijiNational}
+            ${seijiNationalInner}
               AND election_kaiji NOT IN (SELECT DISTINCT election_kaiji FROM mic)
+          ),
+          combined AS (
+            SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM mic
+            UNION ALL
+            SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM seiji
           )
-          SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM mic
-          UNION ALL
-          SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM seiji
+          SELECT * FROM combined
+          WHERE 1=1 ${partyFilter}
           ORDER BY election_kaiji DESC, value DESC NULLS LAST, party
           ${limitOffsetSql()}`;
       }
@@ -1915,7 +2164,7 @@ function selectSql() {
           FROM read_parquet('facts.parquet')
           WHERE ${chamberSql()}
             AND metric = 'party_votes' AND contest = 'pr' AND source_code = '03-10'
-            ${electionFilter} ${blockFilter} ${partyNotTotal} ${partyFilter}
+            ${electionFilter} ${blockFilter} ${partyNotTotal}
           GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), party
         ),
         mic AS (
@@ -1927,12 +2176,16 @@ function selectSql() {
           FROM mic_votes v
         ),
         seiji AS (
-          ${seijiBlock}
+          ${seijiBlockInner}
             AND election_kaiji NOT IN (SELECT DISTINCT election_kaiji FROM mic)
+        ),
+        combined AS (
+          SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM mic
+          UNION ALL
+          SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM seiji
         )
-        SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM mic
-        UNION ALL
-        SELECT election_kaiji, pr_block, party, value, unit, source_code, relative_share, absolute_share FROM seiji
+        SELECT * FROM combined
+        WHERE 1=1 ${partyFilter}
         ORDER BY election_kaiji DESC, pr_block, value DESC NULLS LAST, party
         ${limitOffsetSql()}`;
     }
@@ -1947,7 +2200,7 @@ function selectSql() {
           FROM read_parquet('facts.parquet')
           WHERE ${chamberSql()}
             AND metric = 'current_votes' AND contest = 'pr' ${sourceFilter}
-            ${partyNotTotal} ${electionFilter} ${partyFilter}
+            ${partyNotTotal} ${electionFilter}
             AND coalesce(party, '') NOT IN ('合計', '計', '諸派')
         ),
         eligible AS (
@@ -1958,15 +2211,19 @@ function selectSql() {
             AND gender = 'total' AND (scope = 'all' OR scope IS NULL)
             AND coalesce(pr_block, '') <> ''
           GROUP BY election_kaiji
+        ),
+        scored AS (
+          SELECT v.election_kaiji, '全国' AS pr_block, v.party, v.value, v.unit, v.source_code,
+            CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji) > 0
+              THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji)
+              ELSE NULL END AS relative_share,
+            CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
+          FROM votes v
+          LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji
         )
-        SELECT v.election_kaiji, '全国' AS pr_block, v.party, v.value, v.unit, v.source_code,
-          CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji) > 0
-            THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji)
-            ELSE NULL END AS relative_share,
-          CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
-        FROM votes v
-        LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji
-        ORDER BY v.election_kaiji DESC, v.value DESC NULLS LAST
+        SELECT * FROM scored
+        WHERE 1=1 ${partyFilter}
+        ORDER BY election_kaiji DESC, value DESC NULLS LAST
         ${limitOffsetSql()}`;
     }
 
@@ -1985,7 +2242,7 @@ function selectSql() {
           FROM read_parquet('facts.parquet')
           WHERE ${chamberSql()}
             AND metric = 'party_votes' AND contest = 'pr' AND source_code = '03-10'
-            ${electionFilter} ${blockFilter} ${partyNotTotal} ${partyFilter}
+            ${electionFilter} ${blockFilter} ${partyNotTotal}
           GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), party
         ),
         eligible AS (
@@ -1996,15 +2253,19 @@ function selectSql() {
             AND gender = 'total' AND (scope = 'all' OR scope IS NULL)
             AND coalesce(pr_block, '') <> ''
           GROUP BY election_kaiji, replace(pr_block, '選挙区', '')
+        ),
+        scored AS (
+          SELECT v.*,
+            CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block) > 0
+              THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block)
+              ELSE NULL END AS relative_share,
+            CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
+          FROM votes v
+          LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji AND v.pr_block = e.pr_block
         )
-        SELECT v.*,
-          CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block) > 0
-            THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block)
-            ELSE NULL END AS relative_share,
-          CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
-        FROM votes v
-        LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji AND v.pr_block = e.pr_block
-        ORDER BY v.election_kaiji DESC, v.value DESC NULLS LAST
+        SELECT * FROM scored
+        WHERE 1=1 ${partyFilter}
+        ORDER BY election_kaiji DESC, value DESC NULLS LAST
         ${limitOffsetSql()}`;
     }
 
@@ -2072,7 +2333,7 @@ function selectSql() {
             AND prefecture IS NOT NULL
             AND prefecture NOT IN ('計', '合計', '全国')
             AND source_code = '03-05'
-            ${electionFilter} ${prefFilter} ${partyNotTotal} ${partyFilter}
+            ${electionFilter} ${prefFilter} ${partyNotTotal}
           GROUP BY election_kaiji, prefecture, party
         ),
         eligible AS (
@@ -2083,15 +2344,19 @@ function selectSql() {
             AND gender = 'total' AND (scope = 'all' OR scope IS NULL)
             AND prefecture IS NOT NULL
           GROUP BY election_kaiji, prefecture
+        ),
+        scored AS (
+          SELECT v.*,
+            CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji, v.prefecture) > 0
+              THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji, v.prefecture)
+              ELSE NULL END AS relative_share,
+            CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
+          FROM votes v
+          LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji AND v.prefecture = e.prefecture
         )
-        SELECT v.*,
-          CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji, v.prefecture) > 0
-            THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji, v.prefecture)
-            ELSE NULL END AS relative_share,
-          CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
-        FROM votes v
-        LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji AND v.prefecture = e.prefecture
-        ORDER BY v.election_kaiji DESC, v.prefecture_code NULLS LAST, v.value DESC NULLS LAST
+        SELECT * FROM scored
+        WHERE 1=1 ${partyFilter}
+        ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, value DESC NULLS LAST
         ${limitOffsetSql()}`;
     }
 
@@ -2106,7 +2371,7 @@ function selectSql() {
           AND metric = 'party_votes' AND contest = 'pr' AND source_code = '03-07'
           AND prefecture IS NOT NULL
           AND prefecture NOT IN ('計', '合計', '全国')
-          ${electionFilter} ${blockFilter} ${prefFilter} ${partyNotTotal} ${partyFilter}
+          ${electionFilter} ${blockFilter} ${prefFilter} ${partyNotTotal}
         GROUP BY election_kaiji, replace(pr_block, '選挙区', ''), prefecture, party
       ),
       eligible AS (
@@ -2117,15 +2382,19 @@ function selectSql() {
           AND gender = 'total' AND (scope = 'all' OR scope IS NULL)
           AND prefecture IS NOT NULL
         GROUP BY election_kaiji, prefecture
+      ),
+      scored AS (
+        SELECT v.*,
+          CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block, v.prefecture) > 0
+            THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block, v.prefecture)
+            ELSE NULL END AS relative_share,
+          CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
+        FROM votes v
+        LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji AND v.prefecture = e.prefecture
       )
-      SELECT v.*,
-        CASE WHEN sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block, v.prefecture) > 0
-          THEN 100.0 * v.value / sum(v.value) OVER (PARTITION BY v.election_kaiji, v.pr_block, v.prefecture)
-          ELSE NULL END AS relative_share,
-        CASE WHEN e.eligible_voters > 0 THEN 100.0 * v.value / e.eligible_voters ELSE NULL END AS absolute_share
-      FROM votes v
-      LEFT JOIN eligible e ON v.election_kaiji = e.election_kaiji AND v.prefecture = e.prefecture
-      ORDER BY v.election_kaiji DESC, v.prefecture_code NULLS LAST, v.value DESC NULLS LAST
+      SELECT * FROM scored
+      WHERE 1=1 ${partyFilter}
+      ORDER BY election_kaiji DESC, prefecture_code NULLS LAST, value DESC NULLS LAST
       ${limitOffsetSql()}`;
   }
 
@@ -2345,12 +2614,14 @@ function renderRows() {
   const sorted = [...state.rows];
   if (state.tab === 'pr') {
     sorted.sort((a, b) => {
-      if (a.election_kaiji !== b.election_kaiji) return b.election_kaiji - a.election_kaiji;
+      // DuckDB-Wasm は BIGINT を BigInt で返すため、比較は Number 化してから行う
+      const kaijiDiff = Number(b.election_kaiji) - Number(a.election_kaiji);
+      if (kaijiDiff) return kaijiDiff;
       const br = (PR_BLOCK_RANK[normalizeBlock(a.pr_block)] ?? 999) - (PR_BLOCK_RANK[normalizeBlock(b.pr_block)] ?? 999);
       if (br) return br;
       const pr = (PREFECTURE_RANK[a.prefecture] ?? 999) - (PREFECTURE_RANK[b.prefecture] ?? 999);
       if (pr) return pr;
-      return (b.value ?? 0) - (a.value ?? 0);
+      return Number(b.value ?? 0) - Number(a.value ?? 0);
     });
   }
 
@@ -2359,16 +2630,18 @@ function renderRows() {
 
   if (state.tab === 'smd') {
     if (state.chamber === 'sangiin') {
+      const showSource = showsSourceColumn();
       els.results.innerHTML = sorted.map((row, i) => `${tr(i)}
         <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
         <td>${html(row.prefecture)}</td>
         <td>${html(districtLabel(row.district_number))}</td>
-        <td>${html(displayPersonName(row.candidate, row.candidate_raw, row.canonical_name))}</td>
-        <td>${html(displayLabel(row.party))}</td>
+        <td>${html(displayNameFromRow(row))}</td>
+        <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
         <td>${html(electedLabel(row.elected))}</td>
         <td class="numeric">${formatValue(row.value, row.unit)}</td>
         <td class="numeric">${html(formatPercent(row.relative_share))}</td>
-        <td class="numeric">${html(formatPercent(row.absolute_share))}</td></tr>`).join('');
+        <td class="numeric">${html(formatPercent(row.absolute_share))}</td>
+        ${showSource ? `<td>${html(sourceLabel(row.source_code))}</td>` : ''}</tr>`).join('');
       return;
     }
     if (usesSeijiSource() || usesUnifiedSource()) {
@@ -2377,7 +2650,7 @@ function renderRows() {
         <td>${html(row.prefecture)}</td>
         <td>${html(districtLabel(row.district_number))}</td>
         <td>${html(displayPersonName(row.candidate, row.candidate_raw, row.canonical_name))}</td>
-        <td>${html(displayLabel(row.party))}</td>
+        <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
         <td>${html(
           row.outcome_label
             || (row.elected_smd === true || row.elected_smd === 'true' ? '当選（小）' : null)
@@ -2397,7 +2670,7 @@ function renderRows() {
       <td>${html(row.prefecture)}</td>
       <td>${html(districtLabel(row.district_number))}</td>
       <td>${html(displayPersonName(row.candidate, row.candidate_raw, row.canonical_name))}</td>
-      <td>${html(displayLabel(row.party))}</td>
+      <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
       <td>${html(electedLabel(row.elected))}</td>
       <td class="numeric">${formatValue(row.value, row.unit)}</td>
       <td class="numeric">${html(formatPercent(row.relative_share))}</td>
@@ -2416,7 +2689,7 @@ function renderRows() {
       <td>${html(districtLabel(row.district_number))}</td>
       <td>${html(displayLabel(row.municipality))}</td>
       <td>${html(displayLabel(row.subject))}</td>
-      <td>${html(displayLabel(row.party))}</td>
+      <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
       <td class="numeric">${formatValue(row.value, row.unit)}</td>
       <td class="numeric">${html(formatPercent(row.relative_share))}</td>
       <td>${html(row.unit)}</td>
@@ -2434,7 +2707,7 @@ function renderRows() {
       if (level === 'national') {
         return `${tr(i)}
           <td>${html(electionLabelForUi(row.election_kaiji, state.chamber))}</td>
-          <td>${html(displayLabel(row.party))}</td>
+          <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td class="numeric">${html(formatPercent(row.relative_share))}</td>
           <td class="numeric">${html(formatPercent(row.absolute_share))}</td>${srcCell(row)}</tr>`;
@@ -2443,7 +2716,7 @@ function renderRows() {
         return `${tr(i)}
           <td>${html(electionLabelForUi(row.election_kaiji, state.chamber))}</td>
           <td>${html(block)}</td>
-          <td>${html(displayLabel(row.party))}</td>
+          <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td class="numeric">${html(formatPercent(row.relative_share))}</td>
           <td class="numeric">${html(formatPercent(row.absolute_share))}</td>${srcCell(row)}</tr>`;
@@ -2453,7 +2726,7 @@ function renderRows() {
           return `${tr(i)}
             <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
             <td>${html(block)}</td>
-            <td>${html(displayLabel(row.party))}</td>
+            <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
             <td class="numeric">${html(row.list_rank ?? '—')}</td>
             <td>${html(displayPersonName(row.candidate, row.candidate_raw))}</td>
             <td class="numeric">${row.value == null ? '—' : formatValue(row.value, row.unit)}</td>
@@ -2464,7 +2737,7 @@ function renderRows() {
           return `${tr(i)}
             <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
             <td>${html(row.prefecture)}</td>
-            <td>${html(displayLabel(row.party))}</td>
+            <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
             <td>${html(displayPersonName(row.candidate, row.candidate_raw))}</td>
             <td>${html(elected)}</td>
             <td class="numeric">${formatValue(row.value, row.unit)}</td>
@@ -2472,7 +2745,7 @@ function renderRows() {
         }
         return `${tr(i)}
           <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
-          <td>${html(displayLabel(row.party))}</td>
+          <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
           <td>${html(displayPersonName(row.candidate, row.candidate_raw))}</td>
           <td>${html(elected)}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
@@ -2482,7 +2755,7 @@ function renderRows() {
         return `${tr(i)}
           <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
           <td>${html(row.prefecture)}</td>
-          <td>${html(displayLabel(row.party))}</td>
+          <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
           <td class="numeric">${formatValue(row.value, row.unit)}</td>
           <td class="numeric">${html(formatPercent(row.relative_share))}</td>
           <td class="numeric">${html(formatPercent(row.absolute_share))}</td></tr>`;
@@ -2491,7 +2764,7 @@ function renderRows() {
         <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
         <td>${html(block)}</td>
         <td>${html(row.prefecture)}</td>
-        <td>${html(displayLabel(row.party))}</td>
+        <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
         <td class="numeric">${formatValue(row.value, row.unit)}</td>
         <td class="numeric">${html(formatPercent(row.relative_share))}</td>
         <td class="numeric">${html(formatPercent(row.absolute_share))}</td>${srcCell(row)}</tr>`;
@@ -2503,7 +2776,7 @@ function renderRows() {
     if (state.chamber === 'sangiin') {
       els.results.innerHTML = sorted.map((row, i) => `${tr(i)}
         <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
-        <td>${html(displayLabel(row.party))}</td>
+        <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
         <td>${html(displayPersonName(row.candidate, row.candidate_raw, row.canonical_name))}</td>
         <td>${html(electedLabel(row.elected))}</td>
         <td class="numeric">${formatValue(row.value, row.unit)}</td>
@@ -2517,7 +2790,7 @@ function renderRows() {
     els.results.innerHTML = sorted.map((row, i) => `${tr(i)}
       <td>${html(electionLabel(row.election_kaiji, state.chamber))}</td>
       <td>${html(normalizeBlock(row.pr_block))}</td>
-      <td>${html(displayLabel(row.party))}</td>
+      <td>${html(displayPartyName(row.party, row.election_kaiji))}</td>
       <td class="numeric">${html(row.list_rank ?? '—')}</td>
       <td>${html(displayPersonName(row.candidate, null, row.canonical_name))}</td>
       <td>${html(displayLabel(row.dual_district))}</td>
@@ -2636,25 +2909,25 @@ function csvHeaders() {
 function csvRowValues(row) {
   const label = electionLabel(row.election_kaiji, state.chamber);
   const year = electionYear(row.election_kaiji, state.chamber);
-  const person = displayPersonName(row.candidate, row.candidate_raw, row.canonical_name);
+  const person = displayNameFromRow(row);
   if (state.tab === 'smd') {
     if (state.chamber === 'sangiin') {
       return [
         label, row.election_kaiji, year, row.prefecture, row.district_number,
-        person, displayLabel(row.party), row.elected, electedLabel(row.elected),
+        person, displayPartyName(row.party, row.election_kaiji), row.elected, electedLabel(row.elected),
         row.value, row.unit, row.relative_share, row.absolute_share, row.source_code
       ];
     }
     if (usesSeijiSource()) {
       return [
         label, row.election_kaiji, year, row.prefecture, row.district_number,
-        person, displayLabel(row.party), row.outcome, row.outcome_label,
+        person, displayPartyName(row.party, row.election_kaiji), row.outcome, row.outcome_label,
         row.value, row.unit, row.relative_share, row.absolute_share, row.sekihai_rate, row.source_code
       ];
     }
     return [
       label, row.election_kaiji, year, row.prefecture, row.district_number,
-      person, displayLabel(row.party), row.elected, electedLabel(row.elected),
+      person, displayPartyName(row.party, row.election_kaiji), row.elected, electedLabel(row.elected),
       row.value, row.unit, row.relative_share, row.sekihai_rate,
       row.gender, genderLabel(row.gender), row.source_code
     ];
@@ -2663,7 +2936,7 @@ function csvRowValues(row) {
     return [
       label, row.election_kaiji, year, row.category, row.prefecture,
       row.district_number, displayLabel(row.municipality), displayLabel(row.subject),
-      displayLabel(row.party), row.value, row.relative_share, row.unit, row.grain, row.source_code
+      displayPartyName(row.party, row.election_kaiji), row.value, row.relative_share, row.unit, row.grain, row.source_code
     ];
   }
   if (state.tab === 'pr') {
@@ -2672,30 +2945,30 @@ function csvRowValues(row) {
       if (state.chamber === 'shugiin') {
         return [
           label, row.election_kaiji, year, level, normalizeBlock(row.pr_block),
-          displayLabel(row.party), row.list_rank, person, row.value, row.unit, row.source_code
+          displayPartyName(row.party, row.election_kaiji), row.list_rank, person, row.value, row.unit, row.source_code
         ];
       }
       return [
         label, row.election_kaiji, year, level, row.prefecture,
-        displayLabel(row.party), person, row.elected, electedLabel(row.elected),
+        displayPartyName(row.party, row.election_kaiji), person, row.elected, electedLabel(row.elected),
         row.value, row.unit, row.source_code
       ];
     }
     return [
       label, row.election_kaiji, year, level, normalizeBlock(row.pr_block),
-      row.prefecture, displayLabel(row.party), row.value, row.unit,
+      row.prefecture, displayPartyName(row.party, row.election_kaiji), row.value, row.unit,
       row.relative_share, row.absolute_share, row.source_code
     ];
   }
   if (state.tab === 'prlist') {
     if (state.chamber === 'sangiin') {
       return [
-        label, row.election_kaiji, year, displayLabel(row.party), person,
+        label, row.election_kaiji, year, displayPartyName(row.party, row.election_kaiji), person,
         row.elected, electedLabel(row.elected), row.value, row.unit, row.source_code
       ];
     }
     return [
-      label, row.election_kaiji, year, normalizeBlock(row.pr_block), displayLabel(row.party),
+      label, row.election_kaiji, year, normalizeBlock(row.pr_block), displayPartyName(row.party, row.election_kaiji),
       row.list_rank, person, displayLabel(row.dual_district), row.party_seats, row.sekihai_rate,
       row.outcome, prListOutcomeLabel(row.outcome), row.source
     ];
@@ -2813,26 +3086,52 @@ async function runSearch(event, { resetPage = true } = {}) {
 
 
 async function loadSeijiCoverage() {
+  const distinctNums = async (sql) => {
+    const rows = await state.conn.query(sql);
+    return rows.toArray().map((r) => Number(Object.values(r.toJSON())[0])).filter((n) => Number.isFinite(n));
+  };
+  const distinctStrings = async (sql) => {
+    const rows = await state.conn.query(sql);
+    return rows.toArray().map((r) => String(Object.values(r.toJSON())[0])).filter(Boolean);
+  };
+
   if (state.hasSeijiSmdDistrict) {
     try {
-      const cov = await state.conn.query(`
-        SELECT
-          list_sort(list_distinct(list(election_kaiji))) elections,
-          list_sort(list_distinct(list(prefecture) FILTER (WHERE prefecture IS NOT NULL))) prefectures
+      state.seijiSmdElections = await distinctNums(`
+        SELECT DISTINCT election_kaiji
         FROM read_parquet('seiji_gakkai_smd_district_votes.parquet')
-        WHERE metric = 'candidate_votes'`);
-      const values = cov.toArray()[0].toJSON();
-      state.seijiSmdElections = Array.from(values.elections ?? []).map(Number).sort((a, b) => b - a);
-      state.seijiPrefectures = sortPrefectures(Array.from(values.prefectures ?? []).map(String));
+        WHERE metric = 'candidate_votes' AND election_kaiji IS NOT NULL
+        ORDER BY election_kaiji DESC`);
+      state.seijiPrefectures = sortPrefectures(await distinctStrings(`
+        SELECT DISTINCT prefecture
+        FROM read_parquet('seiji_gakkai_smd_district_votes.parquet')
+        WHERE prefecture IS NOT NULL
+        ORDER BY prefecture`));
       const districts = await state.conn.query(`
-        SELECT prefecture, list_sort(list_distinct(list(district_number))) districts
+        SELECT DISTINCT prefecture, district_number
         FROM read_parquet('seiji_gakkai_smd_district_votes.parquet')
         WHERE district_number IS NOT NULL AND prefecture IS NOT NULL
-        GROUP BY prefecture`);
+        ORDER BY prefecture, district_number`);
       state.seijiDistrictsByPref = {};
       for (const row of districts.toArray()) {
         const item = row.toJSON();
-        state.seijiDistrictsByPref[String(item.prefecture)] = Array.from(item.districts ?? []).map(Number);
+        const pref = String(item.prefecture);
+        if (!state.seijiDistrictsByPref[pref]) state.seijiDistrictsByPref[pref] = [];
+        state.seijiDistrictsByPref[pref].push(Number(item.district_number));
+      }
+      const smdPartyRows = await state.conn.query(`
+        SELECT election_kaiji, party, max(value) AS votes
+        FROM read_parquet('seiji_gakkai_smd_district_votes.parquet')
+        WHERE metric = 'candidate_votes'
+          AND coalesce(party, '') NOT IN ('', '合計', '計')
+        GROUP BY election_kaiji, party
+        ORDER BY election_kaiji, votes DESC NULLS LAST, party`);
+      state.partiesByElectionSeijiSmd = {};
+      for (const row of smdPartyRows.toArray()) {
+        const item = row.toJSON();
+        const key = `shugiin-${item.election_kaiji}`;
+        if (!state.partiesByElectionSeijiSmd[key]) state.partiesByElectionSeijiSmd[key] = [];
+        state.partiesByElectionSeijiSmd[key].push(String(item.party));
       }
     } catch (error) {
       console.warn('seiji district coverage skipped', error);
@@ -2873,18 +3172,22 @@ async function loadSeijiCoverage() {
   }
   if (state.hasSeijiTurnout) {
     try {
-      const cov = await state.conn.query(`
-        SELECT
-          list_sort(list_distinct(list(election_kaiji))) elections,
-          list_sort(list_distinct(list(prefecture) FILTER (WHERE prefecture IS NOT NULL))) prefectures,
-          list_sort(list_distinct(list(pr_block) FILTER (
-            WHERE contest = 'pr' AND grain = 'block' AND pr_block IS NOT NULL AND pr_block <> '全国'
-          ))) blocks
-        FROM read_parquet('seiji_gakkai_turnout.parquet')`);
-      const values = cov.toArray()[0].toJSON();
-      state.seijiTurnoutElections = Array.from(values.elections ?? []).map(Number).sort((a, b) => b - a);
-      state.seijiTurnoutPrefectures = sortPrefectures(Array.from(values.prefectures ?? []).map(String));
-      state.seijiPrBlocks = Array.from(values.blocks ?? []).map(String);
+      state.seijiTurnoutElections = await distinctNums(`
+        SELECT DISTINCT election_kaiji
+        FROM read_parquet('seiji_gakkai_turnout.parquet')
+        WHERE election_kaiji IS NOT NULL
+        ORDER BY election_kaiji DESC`);
+      state.seijiTurnoutPrefectures = sortPrefectures(await distinctStrings(`
+        SELECT DISTINCT prefecture
+        FROM read_parquet('seiji_gakkai_turnout.parquet')
+        WHERE prefecture IS NOT NULL`));
+      const blocks = await distinctStrings(`
+        SELECT DISTINCT pr_block
+        FROM read_parquet('seiji_gakkai_turnout.parquet')
+        WHERE contest = 'pr' AND grain = 'block'
+          AND pr_block IS NOT NULL AND pr_block <> '全国'
+        ORDER BY pr_block`);
+      if (blocks.length) state.seijiPrBlocks = blocks;
     } catch (error) {
       console.warn('seiji turnout coverage skipped', error);
       state.hasSeijiTurnout = false;
@@ -2892,11 +3195,11 @@ async function loadSeijiCoverage() {
   }
   if (state.hasSeijiPr) {
     try {
-      const cov = await state.conn.query(`
-        SELECT list_sort(list_distinct(list(election_kaiji))) elections
-        FROM read_parquet('seiji_gakkai_pr_votes.parquet')`);
-      const values = cov.toArray()[0].toJSON();
-      state.seijiPrElections = Array.from(values.elections ?? []).map(Number).sort((a, b) => b - a);
+      state.seijiPrElections = await distinctNums(`
+        SELECT DISTINCT election_kaiji
+        FROM read_parquet('seiji_gakkai_pr_votes.parquet')
+        WHERE election_kaiji IS NOT NULL
+        ORDER BY election_kaiji DESC`);
       const partyRows = await state.conn.query(`
         SELECT election_kaiji, party, max(value) AS votes
         FROM read_parquet('seiji_gakkai_pr_votes.parquet')
@@ -2910,13 +3213,12 @@ async function loadSeijiCoverage() {
         if (!state.partiesByElectionSeiji[key]) state.partiesByElectionSeiji[key] = [];
         state.partiesByElectionSeiji[key].push(String(item.party));
       }
-      const blocks = await state.conn.query(`
-        SELECT list_sort(list_distinct(list(pr_block) FILTER (
-          WHERE geo_level = 'block' AND pr_block IS NOT NULL
-        ))) blocks
-        FROM read_parquet('seiji_gakkai_pr_votes.parquet')`);
-      const bl = Array.from(blocks.toArray()[0]?.toJSON()?.blocks ?? []).map(String);
-      if (bl.length) state.seijiPrBlocks = bl;
+      const blocks = await distinctStrings(`
+        SELECT DISTINCT pr_block
+        FROM read_parquet('seiji_gakkai_pr_votes.parquet')
+        WHERE geo_level = 'block' AND pr_block IS NOT NULL
+        ORDER BY pr_block`);
+      if (blocks.length) state.seijiPrBlocks = blocks;
     } catch (error) {
       console.warn('seiji pr coverage skipped', error);
       state.hasSeijiPr = false;
@@ -3077,6 +3379,26 @@ async function loadCoverage() {
     if (String(item.election_id || '').startsWith('shugiin-')) {
       if (!state.partiesByElection[kaiji]) state.partiesByElection[kaiji] = [];
       state.partiesByElection[kaiji].push(String(item.party));
+    }
+  }
+
+  const smdPartyRows = await state.conn.query(`
+    SELECT election_id, election_kaiji, party, max(value) AS votes
+    FROM read_parquet('facts.parquet')
+    WHERE metric = 'candidate_votes' AND contest IN ('smd', 'district')
+      AND coalesce(party, '') NOT IN ('', '合計', '計')
+    GROUP BY election_id, election_kaiji, party
+    ORDER BY election_kaiji, votes DESC NULLS LAST, party`);
+  state.partiesByElectionSmd = {};
+  for (const row of smdPartyRows.toArray()) {
+    const item = row.toJSON();
+    const key = String(item.election_id || `shugiin-${item.election_kaiji}`);
+    if (!state.partiesByElectionSmd[key]) state.partiesByElectionSmd[key] = [];
+    state.partiesByElectionSmd[key].push(String(item.party));
+    const kaiji = Number(item.election_kaiji);
+    if (String(item.election_id || '').startsWith('shugiin-')) {
+      if (!state.partiesByElectionSmd[kaiji]) state.partiesByElectionSmd[kaiji] = [];
+      state.partiesByElectionSmd[kaiji].push(String(item.party));
     }
   }
 
@@ -3252,9 +3574,60 @@ async function init() {
       }
     }
 
+    const sangiinYomiNameResponse = await fetch(new URL('./data/sangiin_yomi_name_map.parquet', window.location.href).href);
+    state.hasSangiinYomiNameMap = sangiinYomiNameResponse.ok;
+    if (state.hasSangiinYomiNameMap) {
+      try {
+        await state.db.registerFileBuffer(
+          'sangiin_yomi_name_map.parquet',
+          new Uint8Array(await sangiinYomiNameResponse.arrayBuffer())
+        );
+      } catch (sangiinYomiNameError) {
+        console.warn('sangiin yomi name map register skipped', sangiinYomiNameError);
+        state.hasSangiinYomiNameMap = false;
+      }
+    }
+
+    const partyAliasResponse = await fetch(new URL('./data/party_name_aliases.parquet', window.location.href).href);
+    state.hasPartyAliases = partyAliasResponse.ok;
+    if (state.hasPartyAliases) {
+      try {
+        await state.db.registerFileBuffer(
+          'party_name_aliases.parquet',
+          new Uint8Array(await partyAliasResponse.arrayBuffer())
+        );
+      } catch (partyAliasError) {
+        console.warn('party aliases register skipped', partyAliasError);
+        state.hasPartyAliases = false;
+      }
+    }
+
     state.conn = await state.db.connect();
     await loadCoverage();
     await loadSeijiCoverage();
+    if (state.hasPartyAliases) {
+      try {
+        const aliasRows = await state.conn.query(`
+          SELECT election_kaiji, alias_name, canonical_name
+          FROM read_parquet('party_name_aliases.parquet')`);
+        state.partyAliasGlobal = {};
+        state.partyAliasByKaiji = {};
+        for (const row of aliasRows.toArray()) {
+          const item = row.toJSON();
+          const alias = String(item.alias_name || '');
+          const canon = String(item.canonical_name || '');
+          if (!alias || !canon) continue;
+          if (item.election_kaiji == null || item.election_kaiji === '') {
+            state.partyAliasGlobal[alias] = canon;
+          } else {
+            state.partyAliasByKaiji[`${Number(item.election_kaiji)}|${alias}`] = canon;
+          }
+        }
+      } catch (partyLoadError) {
+        console.warn('party aliases load skipped', partyLoadError);
+        state.hasPartyAliases = false;
+      }
+    }
 
     state.ready = true;
     setControlsEnabled(true);
@@ -3285,6 +3658,9 @@ $$('.tab').forEach((button) => {
 });
 if (els.dataSource) {
   els.dataSource.addEventListener('change', () => {
+    if (canUseSeijiForTab()) {
+      state.dataSourcePreference = els.dataSource.value || 'unified';
+    }
     syncDataSourceUi();
     refreshElectionOptions();
     refreshPrefectureOptions();
@@ -3331,7 +3707,7 @@ if (els.dataSource) {
 }
 els.election.addEventListener('change', () => {
   if (state.tab === 'muni') refreshMunicipalityOptions();
-  if (state.tab === 'pr' || state.tab === 'prlist') refreshPartyOptions();
+  if (state.tab === 'pr' || state.tab === 'prlist' || state.tab === 'smd') refreshPartyOptions();
 });
 els.contest.addEventListener('change', () => {
   if (state.tab === 'turnout' && usesSeijiSource()) {
@@ -3373,7 +3749,7 @@ els.resultLimit?.addEventListener('change', () => {
   if (state.ready) runSearch();
 });
 els.prParty?.addEventListener('change', () => {
-  if (state.ready && (state.tab === 'pr' || state.tab === 'prlist')) runSearch();
+  if (state.ready && (state.tab === 'pr' || state.tab === 'prlist' || state.tab === 'smd')) runSearch();
 });
 els.electedFilter?.addEventListener('change', () => {
   if (state.ready && (state.tab === 'smd' || state.tab === 'prlist')) runSearch();

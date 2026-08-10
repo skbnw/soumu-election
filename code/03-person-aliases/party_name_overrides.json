@@ -1,0 +1,12 @@
+{
+  "description": "政党別名の手動 override。原本は改変しない。優先: by_kaiji → global → シード。",
+  "global": [],
+  "by_kaiji": [
+    {
+      "election_kaiji": 47,
+      "alias": "維新",
+      "canonical": "維新の党",
+      "note": "2014衆・政治学会略称。MICは維新の党"
+    }
+  ]
+}

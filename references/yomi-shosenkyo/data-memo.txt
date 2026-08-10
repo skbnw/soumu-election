@@ -17,6 +17,8 @@
 3. 総務省 MIC facts の小選挙区氏名（選挙区内で読売候補と突合できた行のみ）
    - 異体字セレクタ (IVS)、外字 PUA、かな混じり（おおさか誠二）を含む
 4. 政治学会かな ↔ 読売漢字マップ（上記）
+5. 読売選挙DB立候補者リスト `references/yomi-senkyoDB-list/`（白書一意名のみ・`yomi_senkyodb`）
+   - 詳細: 同フォルダの `data-memo.txt`
 
 ## 誤 giin_cd の補正
 原本CSVは改変しない。手動補正は:

@@ -11,9 +11,13 @@ alwaysApply: true
 2. **衆院の二次アーカイブは政治学会**（`references/seiji-gakkai/`）。研究用レイヤとして保管・正規化する。MIC の代替正本にしない。
    - **小選挙区制（1996– / 第41回–）** と **中選挙区制（1958–1993 / 第28–40回）** は別系列。同一 `facts` に混ぜない。
 3. **参院の二次アーカイブは関西大・参院選DB**（`references/sangiin-kansai-u.ac.jp/`）。MIC 欠落の穴埋めに限って倉庫へ載せる（既存の `kansai-*`）。全置換しない。
-4. **読売等の紙面・人名レイヤ**（比例名簿・別名）は表示・検索補助。MIC/二次の数値正本を上書きしない。
+   - 参24・26の県区（都道府県計）は読売新聞CD-ROM（`references/yomi-sangiin-cdrom/`、`yomi-cdrom-district-pref-*`）で穴埋め。MIC 03-13 が揃い次第差し替え。
+4. **読売等の紙面・人名／政党別名レイヤ**（比例名簿・人名別名・政党別名）は表示・検索補助。MIC/二次の数値正本を上書きしない。
+   - 政党: `web/data/party_name_aliases.parquet`（MIC 正式名を canonical。政治学会略称は alias）
+   - 手動: `code/03-person-aliases/party_name_overrides.json`（回別例: 衆47「維新」→「維新の党」）
+   - 選挙DB立候補者リスト: `references/yomi-senkyoDB-list/`（`giin_cd` 無し。aliases / 参院表示マップの穴埋めのみ）
 5. **混在禁止**: 同一メトリクスで MIC 行と二次行を silently merge しない。必ず `source_code`（例: `03-13`, `kansai-district-21`, 将来 `seiji-gakkai-*`）で分離する。
-6. **横断一貫性**は共通ディメンション（人名別名・政党・地理）で突合する。二次ソース同士のコード体系を無理に統一しない。
+6. **横断一貫性**は共通ディメンション（人名別名・政党別名・地理）で突合する。二次ソース同士のコード体系を無理に統一しない。
 7. **読売紙面・CSVの誤り**（誤 `giin_cd`、別人結合など）は原本を改変しない。補正は下流の aliases／override レイヤで行い、根拠ソースを残す。
    - 手動: `code/03-person-aliases/yomi_giin_cd_overrides.json`
    - 自動: 国会議員白書の一意名一致

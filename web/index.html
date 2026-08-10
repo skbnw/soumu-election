@@ -6,7 +6,7 @@
   <meta name="description" content="衆議院・参議院の国政選挙結果を横断検索できるデータベース（β）です。総務省資料を中心に、研究用二次ソースも一部接続しています。">
   <title>国政選データ横断検索β</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="./styles.css?v=20260809r">
+  <link rel="stylesheet" href="./styles.css?v=20260810j">
 </head>
 <body>
   <header class="masthead">
@@ -55,9 +55,9 @@
           </label>
           <label data-show="pr">集計単位
             <select id="geo-level" disabled>
-              <option value="prefecture">都道府県</option>
-              <option value="block">ブロック</option>
               <option value="national">全国</option>
+              <option value="block">ブロック</option>
+              <option value="prefecture">都道府県</option>
               <option value="list">名簿候補</option>
             </select>
           </label>
@@ -95,7 +95,7 @@
           <label data-show="muni">市区町村
             <select id="municipality" disabled><option value="">すべて</option></select>
           </label>
-          <label data-show="pr prlist" id="pr-party-label">政党
+          <label data-show="smd pr prlist" id="pr-party-label">政党
             <select id="pr-party" disabled><option value="">すべて</option></select>
           </label>
           <label data-show="turnout judicial">指標
@@ -151,15 +151,15 @@
         <p>検索結果は選挙回・地域・候補者・政党などの条件で絞り込み、表示条件に合う行をCSVとして保存できます（画面のページ件数に限らず全件）。CSVには出典（source_code / source）を含めます。画面の一覧では、比例名簿タブ以外は出典列を省略しています。</p>
         <p>人名は漢字表記を基本に表示し、読み仮名は検索時にも使えます。市区町村タブでは小選挙区・比例の市区町村別得票に加え、都道府県単位の有権者・投票と国民審査を参考表示します。</p>
         <p>衆院の比例名簿は、読売新聞紙面の比例ブロック名簿記事を構造化した二次ソースです（1996-衆41回〜）。当落は紙面表記に合わせ「比当」（比例で当選）／「小当」（重複立候補で小選挙区当選）／「落」の3区分です。名簿順位・氏名・当選枠・重複区も原則として同一紙面記事由来で、出典は「読売紙面記事」と表示します。惜敗率は紙面に無い行が多く空欄になります。紙面で比当が欠落している場合のみ、読売選挙CSVの比当表記で突合補完することがあり、その行は「読売紙面（比当突合）」になります。</p>
-        <p>衆院の小選挙区・市町村・比例・投票タブは、既定で「01 統合」です。同一キーでは総務省 MIC を使い、第41〜43回など MIC 欠落分だけ政治学会で穴埋めします（行ごとに出典列を表示。数値の silently merge はしません）。「02 総務省」「03 政治学会」は比較・検証用です。政治学会の候補者名は読売漢字リストで表示・検索できます。1958–1993年の中選挙区制は制度が異なるため別系列とし、当面サイトには掲載しません（将来「衆院選（中選挙区）」として分離公開する想定）。</p>
+        <p>衆院の小選挙区・市町村・比例・投票タブは、既定で「01 統合」です。同一キーでは総務省 MIC を使い、第41〜43回など MIC 欠落分だけ政治学会で穴埋めします（行ごとに出典列を表示。数値の silently merge はしません）。「02 総務省」「03 政治学会」は比較・検証用です。政治学会の候補者名は読売漢字リスト、政党名は正式名（例: 自民→自由民主党）で表示・検索できます。1958–1993年の中選挙区制は制度が異なるため別系列とし、当面サイトには掲載しません（将来「衆院選（中選挙区）」として分離公開する想定）。</p>
         <p>参院の比例名簿は総務省の比例名簿登載者（全国の個人得票・当落）です。当落フィルタは当選／落選、出典は source_code（総務省 mic-* 等）を表示します。都道府県別の個人得票は比例代表タブの「名簿候補」側です。</p>
-        <p>衆院選に加え、参院選（第21〜27回）の県区候補者・比例政党得票・投票データを同一リポジトリで公開しています。第21〜26回は市区町村別得票にも対応しています。第21回全市区町村および第22回の一部県（青森・宮城・東京・神奈川・愛知・広島・香川・高知・鹿児島）は総務省公開が画像スキャンPDF等のため、関西大学名取研究室「参院選DB」（二次ソース）で補完しています（source_code が kansai-*）。参院県区の候補者別得票は第21〜23回を関西大DBの都道府県集計、第25・27回を総務省03-13で接続（第24・26回は手元に関西大選挙区CSVがなく未接続）。</p>
+        <p>衆院選に加え、参院選（第21〜27回）の県区候補者・比例政党得票・投票データを同一リポジトリで公開しています。第21〜26回は市区町村別得票にも対応しています。第21回全市区町村および第22回の一部県（青森・宮城・東京・神奈川・愛知・広島・香川・高知・鹿児島）は総務省公開が画像スキャンPDF等のため、関西大学名取研究室「参院選DB」（二次ソース）で補完しています（source_code が kansai-*）。参院県区の候補者別得票は第21〜23回を関西大DBの都道府県集計、第25・27回を総務省03-13、第24・26回を読売新聞CD-ROMの都道府県計（source_code が yomi-cdrom-district-pref-*）で接続しています。候補者名の画面表示は、得票が一致する範囲で読売CD-ROM表記を優先します（数値正本は MIC／明示した二次ソースのまま）。一覧には出典列を表示します。</p>
         <p>このサイトは非公式のオープンデータプロジェクトです。正確性を要する用途では、必ず総務省の原資料（および読売紙面など一次資料）も確認してください。関西大データの利用・引用は提供者の案内に従ってください。</p>
       </div>
     </section>
   </main>
 
   <footer><span>NATIONAL ELECTION RESULTS (MIC + RESEARCH SECONDARY SOURCES)</span><span>Built with DuckDB-Wasm</span></footer>
-  <script type="module" src="./app.js?v=20260810a"></script>
+  <script type="module" src="./app.js?v=20260810k"></script>
 </body>
 </html>

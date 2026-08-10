@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-build_person_name_aliases.py v1.4
+build_person_name_aliases.py v1.5
+- v1.5: 読売選挙DB立候補者リスト（yomi_senkyodb_candidates）を白書一意名で alias に opt-in
 - v1.4: 政治学会かな↔読売漢字マップ（seiji_candidate_name_map）を alias に取り込み
 - v1.3: 手動 override（yomi_giin_cd_overrides.json）を最優先で適用。原本CSVは改変しない
 - v1.2: 同一 giin_cd に別人名が混入する読売CSV誤りを、国会議員白書名で補正
@@ -35,6 +36,7 @@ OVERRIDES_JSON = Path(__file__).resolve().parent / "yomi_giin_cd_overrides.json"
 KOKKAI_ROOT = REPO / "references" / "kokkai.sugawarataku.net"
 FACTS = REPO / "web" / "data" / "facts.parquet"
 SEIJI_NAME_MAP = REPO / "web" / "data" / "seiji_candidate_name_map.parquet"
+SENKYODB_CAND = REPO / "web" / "data" / "yomi_senkyodb_candidates.parquet"
 OUT_DIR = REPO / "output" / "03-person-aliases"
 WEB_OUT = REPO / "web" / "data" / "person_name_aliases.parquet"
 
@@ -507,6 +509,30 @@ def main() -> None:
             add_alias(bucket, pid, kana, "seiji_kana", canon)
             seiji_kanji_linked += 1
 
+    senkyodb_linked = 0
+    if SENKYODB_CAND.is_file():
+        con_db = duckdb.connect()
+        db_names = con_db.execute(
+            """
+            SELECT DISTINCT candidate_name
+            FROM read_parquet(?)
+            WHERE candidate_name IS NOT NULL AND candidate_name <> ''
+            """,
+            [str(SENKYODB_CAND)],
+        ).fetchall()
+        con_db.close()
+        for (name,) in db_names:
+            name_s = str(name).strip()
+            if not name_s:
+                continue
+            name_ids = kokkai_by_name.get(normalize_name(name_s)) or set()
+            if len(name_ids) != 1:
+                continue
+            pid = next(iter(name_ids))
+            canon = canonical.get(pid) or name_s
+            add_alias(bucket, pid, name_s, "yomi_senkyodb", canon)
+            senkyodb_linked += 1
+
     rows = list(bucket.values())
     rows.sort(key=lambda r: (r["person_id"], r["alias_name"]))
 
@@ -536,10 +562,11 @@ def main() -> None:
     report = OUT_DIR / f"{stamp}_alias_build_report.txt"
     lines = [
         f"persons={len(canonical)} alias_rows={len(rows)} mic_district_links={linked} "
-        f"seiji_kanji_aliases={seiji_kanji_linked}",
+        f"seiji_kanji_aliases={seiji_kanji_linked} senkyodb_aliases={senkyodb_linked}",
         f"yomi_giin_corrections={_LAST_YOMI_CORRECTIONS} ",
         f"manual_overrides_defined={len(overrides)} manual_overrides_applied={len(_LAST_OVERRIDE_HITS)}",
         f"yomi_csv={YOMI_CSV}",
+        f"senkyodb={SENKYODB_CAND}",
         f"overrides_json={OVERRIDES_JSON}",
         f"web_out={WEB_OUT}",
         "",
