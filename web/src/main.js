@@ -143,7 +143,7 @@ const els = {
   district: $('#district'), municipality: $('#municipality'),
   contest: $('#contest'), scope: $('#scope'), geoLevel: $('#geo-level'),
   prBlock: $('#pr-block'), prParty: $('#pr-party'), metric: $('#metric'), keyword: $('#keyword'),
-  electedFilter: $('#elected-filter'), dataSource: $('#data-source'),
+  electedFilter: $('#elected-filter'), dataSource: $('#data-source'), gender: $('#gender'),
   keywordLabel: $('#keyword-label'), search: $('#search'), status: $('#status'),
   results: $('#results'), head: $('#result-head'), download: $('#download'),
   resultRange: $('#result-range'),
@@ -392,6 +392,17 @@ function syncDataSourceUi() {
     });
   } else if (els.scope && state.tab === 'turnout') {
     [...els.scope.options].forEach((o) => { o.hidden = false; });
+  }
+
+  if (els.gender && state.tab === 'turnout' && usesSeijiSource()) {
+    [...els.gender.options].forEach((o) => {
+      o.hidden = (o.value !== 'total' && o.value !== '');
+    });
+    if (els.gender.value !== 'total' && els.gender.value !== '') {
+      els.gender.value = 'total';
+    }
+  } else if (els.gender && state.tab === 'turnout') {
+    [...els.gender.options].forEach((o) => { o.hidden = false; });
   }
 }
 
@@ -931,7 +942,7 @@ async function createDuckDbWorker(mainWorkerUrl) {
 function setControlsEnabled(enabled) {
   [els.election, els.prefecture, els.district, els.municipality, els.contest, els.scope,
     els.geoLevel, els.prBlock, els.prParty, els.metric, els.keyword, els.electedFilter,
-    els.dataSource, els.search, els.resultLimit]
+    els.dataSource, els.search, els.resultLimit, els.gender]
     .forEach((el) => { if (el) el.disabled = !enabled; });
   $$('.tab').forEach((tab) => { tab.disabled = !enabled; });
 }
@@ -1551,6 +1562,7 @@ function whereClauseTurnout() {
   if (els.contest.value) parts.push(`contest = '${escapeSql(els.contest.value)}'`);
   if (els.scope.value === 'all') parts.push(`(scope = 'all' OR scope IS NULL)`);
   else if (els.scope.value) parts.push(`scope = '${escapeSql(els.scope.value)}'`);
+  if (els.gender && els.gender.value) parts.push(`gender = '${escapeSql(els.gender.value)}'`);
   parts.push(...commonFilters({ includePref: true }));
   return parts.join(' AND ');
 }
@@ -2452,6 +2464,7 @@ function selectSql() {
       if (els.election.value) parts.push(`election_kaiji = ${Number(els.election.value)}`);
       if (els.scope.value === 'all') parts.push(`(scope = 'all' OR scope IS NULL)`);
       else if (els.scope.value) parts.push(`scope = '${escapeSql(els.scope.value)}'`);
+      if (els.gender && els.gender.value) parts.push(`gender = '${escapeSql(els.gender.value)}'`);
       const region = els.prefecture.value;
       if (region) {
         if (els.contest.value === 'pr') {
@@ -3733,7 +3746,10 @@ els.geoLevel.addEventListener('change', () => {
   if (state.ready && state.tab === 'pr') runSearch();
 });
 els.resultLimit?.addEventListener('change', () => {
-  if (state.ready) runSearch();
+  if (state.ready) { state.page = 1; runSearch(); }
+});
+els.gender?.addEventListener('change', () => {
+  if (state.ready) { state.page = 1; runSearch(); }
 });
 els.prParty?.addEventListener('change', () => {
   if (state.ready && (state.tab === 'pr' || state.tab === 'prlist' || state.tab === 'smd')) runSearch();
