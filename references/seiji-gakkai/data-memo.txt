@@ -1,0 +1,54 @@
+# 政治学会データ（衆院・二次ソース）
+
+## 権威
+- **正本ではない**。MIC を代替しない。
+- `source` / 将来の `source_code`: `seiji-gakkai` / `seiji-gakkai-historical-*` / `seiji-gakkai-smd-*`
+
+## 二系列（混ぜない）
+
+### A. 小選挙区比例並立制（1996–2017 / 第41–48回）
+- 原本: `00-original/1996-2017/`
+- Bronze: `01-bronze/1996-2017/`（CAN / DS / SH-D / SH-B / SH-HD）
+- Silver: `02-silver/1996-2017/`（SH-D は `03-SH-D/`）
+- 倉庫 opt-in（MIC `facts` / `municipality_facts` とは別ファイル）:
+  - 選挙区×候補: `seiji_gakkai_smd_district_votes.parquet`（`seiji-gakkai-smd-{kaiji}`）
+  - 市区町村×候補: `seiji_gakkai_smd_municipality_votes.parquet`（`seiji-gakkai-smd-muni-{kaiji}`）
+  - 市区町村×比例政党: `seiji_gakkai_pr_municipality_votes.parquet`（SH-HD、`seiji-gakkai-pr-muni-{kaiji}`）
+  - 投票・有権者: `seiji_gakkai_turnout.parquet`
+    - grain: smd=`prefecture|district|municipality` / pr=`block|national`
+  - 比例政党得票: `seiji_gakkai_pr_votes.parquet`（SH-B、block/national）
+  - 地名: `city_raw`/`ward_raw` に原文保持。表示用は NFKC
+    + `seiji_gakkai_municipality_name_overrides.json`
+    + 開票区接尾の統一（`市-N` / `市N区` → `市（N区）`）
+    + 市×市 OCR/異体字は連結しない（例: 士別市+土別市 → 士別市）。フラグ `skip_shi_shi_concat`
+  - 絶対得票率: CAN の `absolute_vote_rate` は回次で % / 割合(0–1) が混在しうる。
+    enrich で % 正規化。UI は `district_eligible_voters` からの再計算を優先（web/app.js v2.10.9+）。
+- 再実行: `python code/04-seiji-gakkai/run_sh_d_pipeline_v1.0.py`
+  - 選挙区のみ: `export_seiji_gakkai_smd_district_votes_v1.0.py`
+  - 市区町村のみ: `export_seiji_gakkai_smd_municipality_votes_v1.0.py`
+  - 比例市区町村: `export_seiji_gakkai_pr_municipality_votes_v1.0.py`
+  - 投票・有権者: `export_seiji_gakkai_turnout_v1.0.py`
+  - 比例: `export_seiji_gakkai_pr_votes_v1.0.py`
+  - 当落・絶対得票 enrich: `enrich_seiji_gakkai_smd_district_outcome_v1.0.py`（pipeline 後に推奨）
+  - 地名表示QA監査: `audit_municipality_labels_v1.0.py`
+  - 表示QAプロセス記録: `code/04-seiji-gakkai/process_display_qa_v1.0.txt`
+- **UI**: 既定は「統合（総務省優先＋政治学会穴埋め）」。比較用に総務省のみ／政治学会のみも選択可。出典列で `source_code` を区別。選挙回表示は「1996-衆」形式。
+
+### B. 中選挙区制（1958–1993 / 第28–40回）
+- 原本: `00-original/1958-1993/`（CAN / DS / 中選挙区投票結果 SH）
+- Silver: `02-silver/historical/`（`genre=HR-Historical`, `system=MMD`）
+  - `elections.jsonl` / `candidates.jsonl` / `districts.jsonl` / `results.jsonl`
+  - `snk_tokuhyo_detail.jsonl`（市区町村別得票詳細）
+- 検証: `python code/04-seiji-gakkai/verify_historical_mmd_silver_v1.0.py`
+- **小選挙区用 facts / SH-D に流し込まない**。定数・惜敗率・比例の意味が異なる。
+
+## Web
+- 既定UIは統合（MIC 優先）。同一キーでは政治学会数値を silently merge しない。
+- 政治学会は穴埋め・比較用（`web/app.js` v2.10+）。
+- **中選挙区は当面非掲載**（保管・検証のみ）。
+- 将来公開するなら第3コーナ「衆院選（中選挙区）」を新設する。既存の衆院選タブに混ぜない。
+
+## 共通化してよいもの
+- 人名別名・漢字マップ（表示・検索のみ）・政党別名（MIC正式名↔政治学会略称）・地理ディメンションの突合
+- 政党別名生成: `python code/03-person-aliases/build_party_name_aliases_v1.0.py`
+  → `web/data/party_name_aliases.parquet`

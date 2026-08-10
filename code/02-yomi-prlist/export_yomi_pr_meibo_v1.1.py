@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-export_yomi_pr_meibo.py v1.1
+export_yomi_pr_meibo.py v1.2
+- v1.2: 衆41〜（1996〜）を含む。記事 Bronze に 41〜43 があるため下限を撤廃
 - v1.1: 入力を本リポ output/02-yomi-prlist/pr_block_meibo.jsonl に変更
         （references 記事 → build_yomi_pr_meibo_from_articles_v1.0.py の成果）
 - v1.0: polidata silver JSONL を直接変換
 
-対象: 第44回以降（MIC 03-11 と重なる範囲）
+対象: 第41回以降（読売紙面記事）
 出力: web/data/yomi_pr_meibo.parquet
 """
 from __future__ import annotations
@@ -107,7 +108,7 @@ def main() -> None:
                 continue
             o = json.loads(line)
             th = o.get("th")
-            if not th or int(th) < 44:
+            if not th or int(th) < 41:
                 continue
             party = (o.get("party") or o.get("party_key") or "").strip()
             block = BLOCK_NORM.get(o.get("pr_block_name") or "", o.get("pr_block_name") or "")

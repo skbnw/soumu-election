@@ -1,3 +1,4 @@
+# v1.3.2: 03-13 左右パネルで県ヘッダを他パネルへコピーしない（隣県への誤帰属を防止）
 # v1.3.1: 03-13 旧Excel（当/落分割ヘッダ・性別列あり）に対応
 # v1.3.0: unclassified（03-11相当）都道府県×名簿候補者得票を追加
 # v1.2.0: 03-13 県区の定数（1人区等）を district_number に保存
@@ -421,10 +422,8 @@ def parse_sangiin_district_candidates(doc: dict[str, Any], sheet: dict[str, Any]
     output: list[dict[str, Any]] = []
 
     def set_district(start: int, prefecture: str, seats: int, byelection: int | None) -> None:
+        # パネルごとに独立。他パネルへコピーすると次県の候補が前県に付く（参27で確認）
         district_by_panel[start] = (prefecture, seats, byelection)
-        for other in starts:
-            if other not in district_by_panel:
-                district_by_panel[other] = (prefecture, seats, byelection)
 
     for row_index in range(header_index + 1, len(table)):
         row = table[row_index]

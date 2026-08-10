@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-build_person_name_aliases.py v1.2
+build_person_name_aliases.py v1.5
+- v1.5: 読売選挙DB立候補者リスト（yomi_senkyodb_candidates）を白書一意名で alias に opt-in
+- v1.4: 政治学会かな↔読売漢字マップ（seiji_candidate_name_map）を alias に取り込み
+- v1.3: 手動 override（yomi_giin_cd_overrides.json）を最優先で適用。原本CSVは改変しない
 - v1.2: 同一 giin_cd に別人名が混入する読売CSV誤りを、国会議員白書名で補正
         （例: 2021山口3区・林芳正 に誤付与された r02187=安倍晋三）
 - v1.1: MIC は選挙区内の氏名突合のみ（別人名の混入を防止）
@@ -29,8 +32,11 @@ import duckdb
 
 REPO = Path(__file__).resolve().parents[2]
 YOMI_CSV = REPO / "references" / "yomi-shosenkyo" / "yomi-election-data-1996-2026.csv"
+OVERRIDES_JSON = Path(__file__).resolve().parent / "yomi_giin_cd_overrides.json"
 KOKKAI_ROOT = REPO / "references" / "kokkai.sugawarataku.net"
 FACTS = REPO / "web" / "data" / "facts.parquet"
+SEIJI_NAME_MAP = REPO / "web" / "data" / "seiji_candidate_name_map.parquet"
+SENKYODB_CAND = REPO / "web" / "data" / "yomi_senkyodb_candidates.parquet"
 OUT_DIR = REPO / "output" / "03-person-aliases"
 WEB_OUT = REPO / "web" / "data" / "person_name_aliases.parquet"
 
@@ -52,6 +58,7 @@ PREF_BY_NUM = {
 }
 
 _LAST_YOMI_CORRECTIONS = 0
+_LAST_OVERRIDE_HITS: list[dict] = []
 
 
 def normalize_name(value: str | None) -> str:
@@ -71,6 +78,95 @@ def normalize_name_soft(value: str | None) -> str:
 def kana_compact(value: str | None) -> str:
     s = normalize_name(value)
     return "".join(ch for ch in s if "ぁ" <= ch <= "ん" or "ァ" <= ch <= "ン" or ch == "ー")
+
+
+def load_overrides() -> list[dict]:
+    if not OVERRIDES_JSON.is_file():
+        return []
+    data = json.loads(OVERRIDES_JSON.read_text(encoding="utf-8"))
+    rows = data.get("overrides") or []
+    out: list[dict] = []
+    for row in rows:
+        correct = str(row.get("correct_giin_cd") or "").strip().lower()
+        if not GIIN_RE.fullmatch(correct):
+            continue
+        item = {
+            "th": int(row["th"]) if row.get("th") not in (None, "") else None,
+            "pref_num": int(row["pref_num"]) if row.get("pref_num") not in (None, "") else None,
+            "district_num": int(row["district_num"]) if row.get("district_num") not in (None, "") else None,
+            "candidate_name": normalize_name(row.get("candidate_name")),
+            "wrong_giin_cd": str(row.get("wrong_giin_cd") or "").strip().lower() or None,
+            "correct_giin_cd": correct,
+            "note": (row.get("note") or "").strip(),
+        }
+        if not item["candidate_name"]:
+            continue
+        out.append(item)
+    return out
+
+
+def match_override(
+    overrides: list[dict],
+    *,
+    th: int | None,
+    pref_num: int | None,
+    district_num: int | None,
+    name: str,
+    csv_giin_cd: str | None,
+) -> dict | None:
+    name_n = normalize_name(name)
+    csv_id = csv_giin_cd.lower() if csv_giin_cd and GIIN_RE.fullmatch(csv_giin_cd) else None
+    for ov in overrides:
+        if ov["candidate_name"] != name_n:
+            continue
+        if ov["th"] is not None and th is not None and ov["th"] != th:
+            continue
+        if ov["pref_num"] is not None and pref_num is not None and ov["pref_num"] != pref_num:
+            continue
+        if ov["district_num"] is not None and district_num is not None and ov["district_num"] != district_num:
+            continue
+        if ov["wrong_giin_cd"] and csv_id and ov["wrong_giin_cd"] != csv_id:
+            continue
+        # 選挙区キーが指定されている場合は位置一致を要求（名前＋誤コードのみの行は許容）
+        if ov["th"] is not None and th is None:
+            continue
+        if ov["pref_num"] is not None and pref_num is None:
+            continue
+        if ov["district_num"] is not None and district_num is None:
+            continue
+        return ov
+    return None
+
+
+def resolve_yomi_person_id(
+    csv_giin_cd: str | None,
+    name: str,
+    kokkai_by_name: dict[str, set[str]],
+    overrides: list[dict],
+    *,
+    th: int | None = None,
+    pref_num: int | None = None,
+    district_num: int | None = None,
+) -> tuple[str | None, str]:
+    """Return (person_id, resolution_source). source: override|kokkai_unique|csv|none"""
+    ov = match_override(
+        overrides,
+        th=th,
+        pref_num=pref_num,
+        district_num=district_num,
+        name=name,
+        csv_giin_cd=csv_giin_cd,
+    )
+    if ov:
+        return ov["correct_giin_cd"], "override"
+
+    name_ids = kokkai_by_name.get(normalize_name(name)) or set()
+    csv_id = csv_giin_cd.lower() if csv_giin_cd and GIIN_RE.fullmatch(csv_giin_cd) else None
+    if len(name_ids) == 1:
+        return next(iter(name_ids)), "kokkai_unique"
+    if csv_id:
+        return csv_id, "csv"
+    return None, "none"
 
 
 def add_alias(bucket: dict[tuple[str, str], dict], person_id: str, alias: str, source: str, canonical: str) -> None:
@@ -136,27 +232,17 @@ def kokkai_name_index(kokkai: list[tuple[str, str, str]]) -> dict[str, set[str]]
     return out
 
 
-def resolve_yomi_person_id(
-    csv_giin_cd: str | None,
-    name: str,
-    kokkai_by_name: dict[str, set[str]],
-) -> str | None:
-    name_ids = kokkai_by_name.get(normalize_name(name)) or set()
-    csv_id = csv_giin_cd.lower() if csv_giin_cd and GIIN_RE.fullmatch(csv_giin_cd) else None
-    if len(name_ids) == 1:
-        return next(iter(name_ids))
-    return csv_id
-
-
 def load_yomi(
     kokkai_by_name: dict[str, set[str]],
+    overrides: list[dict],
 ) -> tuple[dict[str, str], list[dict], dict[tuple[int, str, int], list[tuple[str, str]]]]:
-    global _LAST_YOMI_CORRECTIONS
+    global _LAST_YOMI_CORRECTIONS, _LAST_OVERRIDE_HITS
     by_id_names: dict[str, list[tuple[int, str]]] = defaultdict(list)
     rows: list[dict] = []
     district_cands: dict[tuple[int, str, int], list[tuple[str, str]]] = defaultdict(list)
     name_to_ids: dict[str, set[str]] = defaultdict(set)
     corrections = 0
+    override_hits: list[dict] = []
 
     with YOMI_CSV.open(encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -174,7 +260,26 @@ def load_yomi(
             except ValueError:
                 pref_num = dist_num = None
 
-            person_id = resolve_yomi_person_id(cd, name, kokkai_by_name)
+            person_id, how = resolve_yomi_person_id(
+                cd,
+                name,
+                kokkai_by_name,
+                overrides,
+                th=th,
+                pref_num=pref_num,
+                district_num=dist_num,
+            )
+            if how == "override":
+                override_hits.append(
+                    {
+                        "th": th,
+                        "pref_num": pref_num,
+                        "district_num": dist_num,
+                        "name": name,
+                        "csv_giin_cd": cd.lower() if cd else None,
+                        "person_id": person_id,
+                    }
+                )
             if person_id and GIIN_RE.fullmatch(cd or "") and person_id != cd.lower():
                 corrections += 1
 
@@ -188,6 +293,7 @@ def load_yomi(
                         "person_id": person_id,
                         "pref_num": pref_num,
                         "district_num": dist_num,
+                        "resolve": how,
                     }
                 )
                 if pref_num and dist_num and pref_num in PREF_BY_NUM:
@@ -200,6 +306,7 @@ def load_yomi(
                         "person_id": None,
                         "pref_num": pref_num,
                         "district_num": dist_num,
+                        "resolve": how,
                     }
                 )
 
@@ -211,6 +318,7 @@ def load_yomi(
         if len(ids) != 1:
             continue
         r["person_id"] = next(iter(ids))
+        r["resolve"] = "name_fill"
         pref_num, dist_num = r["pref_num"], r["district_num"]
         if pref_num and dist_num and pref_num in PREF_BY_NUM:
             district_cands[(r["th"], PREF_BY_NUM[pref_num], dist_num)].append((r["person_id"], r["name"]))
@@ -227,6 +335,7 @@ def load_yomi(
         canonical[pid] = preferred or items[-1][1]
 
     _LAST_YOMI_CORRECTIONS = corrections
+    _LAST_OVERRIDE_HITS = override_hits
     return canonical, rows, district_cands
 
 
@@ -311,7 +420,8 @@ def main() -> None:
 
     kokkai = load_kokkai()
     kokkai_by_name = kokkai_name_index(kokkai)
-    canonical, yomi_rows, district_cands = load_yomi(kokkai_by_name)
+    overrides = load_overrides()
+    canonical, yomi_rows, district_cands = load_yomi(kokkai_by_name, overrides)
     for pid, kanji, _kana in kokkai:
         if kanji:
             canonical[pid] = kanji
@@ -371,6 +481,58 @@ def main() -> None:
             add_alias(bucket, pid, a, "mic_raw", canon)
         linked += 1
 
+    seiji_kanji_linked = 0
+    if SEIJI_NAME_MAP.is_file():
+        con_map = duckdb.connect()
+        map_rows = con_map.execute(
+            """
+            SELECT election_kaiji, prefecture, district_number, kana, kanji
+            FROM read_parquet(?)
+            """,
+            [str(SEIJI_NAME_MAP)],
+        ).fetchall()
+        for kaiji, pref, dist, kana, kanji in map_rows:
+            people = district_cands.get((int(kaiji), str(pref), int(dist))) or []
+            pid = None
+            for p_id, p_name in people:
+                if normalize_name(p_name) == normalize_name(kanji):
+                    pid = p_id
+                    break
+            if not pid:
+                name_ids = kokkai_by_name.get(normalize_name(kanji)) or set()
+                if len(name_ids) == 1:
+                    pid = next(iter(name_ids))
+            if not pid:
+                continue
+            canon = canonical.get(pid) or kanji
+            add_alias(bucket, pid, kanji, "yomi_kanji_list", canon)
+            add_alias(bucket, pid, kana, "seiji_kana", canon)
+            seiji_kanji_linked += 1
+
+    senkyodb_linked = 0
+    if SENKYODB_CAND.is_file():
+        con_db = duckdb.connect()
+        db_names = con_db.execute(
+            """
+            SELECT DISTINCT candidate_name
+            FROM read_parquet(?)
+            WHERE candidate_name IS NOT NULL AND candidate_name <> ''
+            """,
+            [str(SENKYODB_CAND)],
+        ).fetchall()
+        con_db.close()
+        for (name,) in db_names:
+            name_s = str(name).strip()
+            if not name_s:
+                continue
+            name_ids = kokkai_by_name.get(normalize_name(name_s)) or set()
+            if len(name_ids) != 1:
+                continue
+            pid = next(iter(name_ids))
+            canon = canonical.get(pid) or name_s
+            add_alias(bucket, pid, name_s, "yomi_senkyodb", canon)
+            senkyodb_linked += 1
+
     rows = list(bucket.values())
     rows.sort(key=lambda r: (r["person_id"], r["alias_name"]))
 
@@ -400,20 +562,38 @@ def main() -> None:
     report = OUT_DIR / f"{stamp}_alias_build_report.txt"
     lines = [
         f"persons={len(canonical)} alias_rows={len(rows)} mic_district_links={linked} "
-        f"yomi_giin_corrections={_LAST_YOMI_CORRECTIONS}",
+        f"seiji_kanji_aliases={seiji_kanji_linked} senkyodb_aliases={senkyodb_linked}",
+        f"yomi_giin_corrections={_LAST_YOMI_CORRECTIONS} ",
+        f"manual_overrides_defined={len(overrides)} manual_overrides_applied={len(_LAST_OVERRIDE_HITS)}",
         f"yomi_csv={YOMI_CSV}",
+        f"senkyodb={SENKYODB_CAND}",
+        f"overrides_json={OVERRIDES_JSON}",
         f"web_out={WEB_OUT}",
         "",
-        "VERIFY r02606 逢坂誠二 aliases:",
+        "MANUAL OVERRIDE HITS:",
     ]
+    if _LAST_OVERRIDE_HITS:
+        for hit in _LAST_OVERRIDE_HITS:
+            lines.append(
+                f"  - th={hit['th']} pref={hit['pref_num']} dist={hit['district_num']} "
+                f"{hit['name']!r} csv={hit['csv_giin_cd']} -> {hit['person_id']}"
+            )
+    else:
+        lines.append("  (none)")
+    lines += ["", "VERIFY r02606 逢坂誠二 aliases:"]
     for r in sorted(verify_osa, key=lambda x: x["alias_name"]):
         lines.append(f"  - {r['alias_name']!r} norm={r['alias_normalized']!r} src={r['source']}")
     lines += ["", "VERIFY r02187 安倍晋三 must NOT include 林芳正:"]
     for r in sorted(verify_abe, key=lambda x: x["alias_name"]):
         lines.append(f"  - {r['alias_name']!r} canon={r['canonical_name']!r} src={r['source']}")
+    bad_abe = [r for r in verify_abe if "林芳正" in (r.get("alias_name") or "")]
+    if bad_abe:
+        raise SystemExit("VERIFY FAIL: r02187 still has 林芳正 alias")
     lines += ["", "VERIFY r03160 林芳正:"]
     for r in sorted(verify_hayashi, key=lambda x: x["alias_name"]):
         lines.append(f"  - {r['alias_name']!r} canon={r['canonical_name']!r} src={r['source']}")
+    if not any(r["alias_name"] == "林芳正" for r in verify_hayashi):
+        raise SystemExit("VERIFY FAIL: r03160 missing 林芳正 alias")
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
     print(f"wrote {stamped}")

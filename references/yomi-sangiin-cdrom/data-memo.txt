@@ -1,0 +1,74 @@
+# 読売新聞 CD-ROM・参院選データ（外部原本メモ）
+
+## 原本パス（PoliData）
+`C:\Users\SKBNW\Documents\PoliData_Development\PoliData_election\01-sources\yomi\00-original\cd-rom\02_sangiin`
+
+本リポジトリには巨大 CSV を複製しない。利用時は上記パスを参照する。
+CD-ROM の利用・再配布条件は原本ライセンスに従う（数値正本にはしない）。
+
+## 収録年 ↔ 参院回次
+| 西暦フォルダ | 参院回次 | 備考 |
+|---|---|---|
+| 2004 | 20 | MIC 現行UI対象外（21〜） |
+| 2007 | 21 | |
+| 2010 | 22 | |
+| 2013 | 23 | |
+| 2016 | 24 | facts 県区（03-13）未接続の穴候補 |
+| 2019 | 25 | MIC 03-13 / 03-14 あり → 突合検証向き |
+| 2022 | 26 | facts 県区（03-13）未接続の穴候補 |
+
+※ 2025=参27 は本 CD-ROM セットに含まれない。
+
+## 各年のファイル構成（cp932 CSV）
+| ファイル | 内容 | 主な列 |
+|---|---|---|
+| `snk_tokuhyo.csv` | 選挙区・候補者得票（市区町村／県計） | 都道府県CD, 市区町村CD, 開票所CD, 都道府県名, 市区町村名, 届出番号, 候補者名, 得票数 |
+| `snk_tohyo.csv` | 選挙区・有権者／投票 | 有権者数, 投票者数, 選挙人名簿数, 在外選挙人名簿数 |
+| `hr_toha_tokuhyo.csv` | 比例・政党得票 | 党派届出番号, 党派名, 得票数 |
+| `hr_tomei_kojin_tokuhyo.csv` | 比例・名簿個人得票（大） | （個人別） |
+| `hr_tohyo.csv` | 比例・有権者／投票 | 同上 |
+
+粒の目安:
+- 県計: `市区町村CD = 000` かつ市区町村名が空白
+- 全国計: `都道府県CD = 00`（投票ファイル等）
+- 市区町村: それ以外の市区町村CD
+
+## 権威階層上の位置
+- **数値正本は総務省 MIC**（`facts` / `municipality_facts`）。
+- 読売 CD-ROM は二次ソース（表示・検索補助、または MIC 欠落の穴埋め候補）。
+- 倉庫接続する場合は `source_code` を分離する（例: `yomi-cdrom-district-24`）。MIC 行と silently merge しない。
+- 関西大 `kansai-*` と同様、全置換しない。
+
+## 本リポでの現状（2026-08-10）
+- references メモ（本ファイル）。CSV は外部参照（複製しない）。
+- 突合: `code/05-yomi-sangiin-cdrom/crosscheck_yomi_cdrom_vs_mic_v1.0.py`
+- **県区 facts 穴埋め（参24・26）**: `code/05-yomi-sangiin-cdrom/merge_yomi_cdrom_district_pref_v1.0.py`
+  - `source_code`: `yomi-cdrom-district-pref-24` / `yomi-cdrom-district-pref-26`
+  - 合区名は `鳥取県・島根県` / `徳島県・高知県` に正規化
+  - 党派は MIC `municipality_facts` 集計から得票一致で付与（付かない行あり）
+  - 当落は改選定数上位（参24=73、参26=75 行が elected）
+  - 出力先: `data/warehouse/parquet/facts.parquet` と `web/data/facts.parquet`
+- **表示用漢字マップ**: `code/05-yomi-sangiin-cdrom/build_sangiin_yomi_name_map_v1.0.py`
+  - `web/data/sangiin_yomi_name_map.parquet`（県計・市区町村、得票キーで MIC/関西大名を読売表記へ）
+  - 数値は変更しない。UI は `coalesce(yomi_name, 原名)` で表示
+  - v1.1: CD-ROM 欠落分を `references/yomi-senkyoDB-list`（正規化 parquet）で穴埋め
+- レポート: `output/05-yomi-sangiin-cdrom/`
+
+## 突合結果サマリ（20260810_0937）
+- **参25 県計 vs MIC `03-13`**: キー突合できた 124/124 が得票完全一致。未突合は主に表記差（例: 髙橋↔高橋、MIC側かな混じり）。
+- **参25 山口・市区町村 vs MIC `03-14-district-35`**: 突合キー 38/38 完全一致。MIC 側は「林よしまさ」等のかな表記が多く、漢字キーでは未突合に見える。
+- **参23 県計 vs `kansai-district-pref-23`**: 68 突合中 66 一致、2件は ±1〜2 票の微差。未突合は関西大側のかな表記差が主因。
+- **参24・26**: CD-ROM に県計・市区町村あり。MIC `03-13` は未接続のため読売CD県計で二次補充（下記 merge 済）。
+
+## 接続結果（20260810_0941）
+- 参24: 225 行 / 45 選挙区、得票は CD 県計と 225/225 一致、党派付与 215、当選 73
+- 参26: 367 行 / 45 選挙区、得票は CD 県計と 367/367 一致、党派付与 350、当選 75
+- MIC 既存行は未変更（同一 `source_code` のみ置換）
+
+## 想定ユース（優先度順）
+1. 参25など MIC がある回で票の一致確認（品質ゲート）← 実施済
+2. 参24・26の県区 facts（03-13 未接続）への二次穴埋め ← 実施済（県計）
+3. 比例個人・人名別名、市区町村粒の読売利用は別途（数値上書き禁止）
+4. 将来 MIC 03-13 が正規化できたら同一キーは MIC 優先へ差し替え
+   - **現状（2026-08-10）**: 参24・26の県区 candidate_votes は `yomi-cdrom-district-pref-*` のまま。
+     倉庫に MIC `03-13` が載り次第、同一キーは MIC に差し替え（読売CDは残さない）。

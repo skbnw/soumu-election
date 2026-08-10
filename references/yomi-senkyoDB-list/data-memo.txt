@@ -1,0 +1,42 @@
+# 読売新聞・選挙DB立候補者リスト（人名照合用）
+
+## 原本
+`references/yomi-senkyoDB-list/`
+- `shugiin-can-list-2005-2026.xlsx` … 衆院 2005–2026（年別シート）
+- `sangiin-can-list-2004-2025.xlsx` … 参院 2004–2025（`sangiin` シート。補選は既定で未取込）
+
+原本 xlsx は改変しない。
+
+## 主な列
+候補者名, ブ/県, 選挙区, 比例, 性別, 生年月日, 当落, 党派, 選挙名, 識別 など。  
+**`giin_cd`（r#####）は無い。** 人物キーには使えない。
+
+## 権威階層上の位置
+- **数値正本ではない**（得票・有権者等を上書きしない）
+- 表示・検索補助の人名照合ソース（読売紙面 CSV・CD-ROM・国会議員白書と同レイヤ）
+- 正本人物キーは引き続き `yomi-shosenkyo` の `giin_cd`（+ override / 白書一意名）
+
+## 収録と既存ソースの関係
+| ソース | 範囲 | 人物ID | 用途 |
+|---|---|---|---|
+| yomi-shosenkyo | 衆 1996–2026 | giin_cd あり | 人名正本・aliases |
+| yomi-sangiin-cdrom | 参 2007–2022 | 無し（得票キー） | 表示名マップ |
+| **yomi-senkyoDB-list** | 衆 2005– / 参 2004– | 無し | 別名・参院表示の穴埋め |
+
+## 本リポでの接続
+1. 正規化: `code/06-yomi-senkyodb-list/normalize_yomi_senkyodb_list_v1.0.py`
+   - 出力: `web/data/yomi_senkyodb_candidates.parquet` / `output/06-yomi-senkyodb-list/`
+2. 参院表示名マップ穴埋め: `code/05-yomi-sangiin-cdrom/build_sangiin_yomi_name_map_v1.0.py`（v1.1）
+   - CD-ROM を優先。欠落は facts 得票キー × senkyoDB 漢字名（氏名一致 / 白書一意名）
+3. aliases opt-in: `code/03-person-aliases/build_person_name_aliases_v1.0.py`（v1.5）
+   - 白書で一意に解決できる候補者名のみ `source=yomi_senkyodb` で追加
+4. MIC 03-13 県名取り違え補正: `code/06-yomi-senkyodb-list/patch_sangiin_district_pref_senkyodb_v1.0.py`
+   - 参25・27の `source_code=03-13` 県区行について、氏名が一意なときだけ県名を修正（数値は不変）
+
+## 生成手順
+```
+python code/06-yomi-senkyodb-list/normalize_yomi_senkyodb_list_v1.0.py
+python code/06-yomi-senkyodb-list/patch_sangiin_district_pref_senkyodb_v1.0.py
+python code/05-yomi-sangiin-cdrom/build_sangiin_yomi_name_map_v1.0.py
+python code/03-person-aliases/build_person_name_aliases_v1.0.py
+```

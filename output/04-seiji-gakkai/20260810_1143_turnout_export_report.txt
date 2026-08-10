@@ -1,0 +1,24 @@
+# 政治学会 → seiji_gakkai_turnout エクスポート
+generated_at=2026-08-10T11:43:11
+rows=70542
+warehouse_out=C:\Users\SKBNW\Documents\Github\soumu-election\data\warehouse\parquet\seiji_gakkai_turnout.parquet
+web_out=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\seiji_gakkai_turnout.parquet
+
+## counts
+- ('pr', 'eligible_voters', 'block'): 88
+- ('pr', 'eligible_voters', 'national'): 8
+- ('pr', 'turnout_rate', 'block'): 88
+- ('pr', 'turnout_rate', 'national'): 8
+- ('pr', 'voters', 'block'): 88
+- ('pr', 'voters', 'national'): 8
+- ('smd', 'eligible_voters', 'district'): 2384
+- ('smd', 'eligible_voters', 'municipality'): 20658
+- ('smd', 'eligible_voters', 'prefecture'): 376
+- ('smd', 'turnout_rate', 'district'): 2384
+- ('smd', 'turnout_rate', 'municipality'): 20658
+- ('smd', 'turnout_rate', 'prefecture'): 376
+- ('smd', 'voters', 'district'): 2384
+- ('smd', 'voters', 'municipality'): 20658
+- ('smd', 'voters', 'prefecture'): 376
+
+- MIC facts へは merge しない

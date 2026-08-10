@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "description": "読売紙面CSVの誤 giin_cd 補正。原本CSVは改変せず、aliases ビルド時のみ適用する。",
+  "overrides": [
+    {
+      "th": 49,
+      "pref_num": 35,
+      "district_num": 3,
+      "candidate_name": "林芳正",
+      "wrong_giin_cd": "r02187",
+      "correct_giin_cd": "r03160",
+      "note": "2021山口3区・林芳正に安倍晋三の議員コードが誤付与されていた",
+      "evidence": "kokkai.sugawarataku.net unique name 林芳正=r03160; MIC/kansai 参21山口は林芳正"
+    }
+  ]
+}
