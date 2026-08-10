@@ -17,13 +17,21 @@
   - 投票・有権者: `seiji_gakkai_turnout.parquet`
     - grain: smd=`prefecture|district|municipality` / pr=`block|national`
   - 比例政党得票: `seiji_gakkai_pr_votes.parquet`（SH-B、block/national）
-  - 地名: `city_raw`/`ward_raw` に原文保持。表示用は NFKC + `seiji_gakkai_municipality_name_overrides.json` のみ
+  - 地名: `city_raw`/`ward_raw` に原文保持。表示用は NFKC
+    + `seiji_gakkai_municipality_name_overrides.json`
+    + 開票区接尾の統一（`市-N` / `市N区` → `市（N区）`）
+    + 市×市 OCR/異体字は連結しない（例: 士別市+土別市 → 士別市）。フラグ `skip_shi_shi_concat`
+  - 絶対得票率: CAN の `absolute_vote_rate` は回次で % / 割合(0–1) が混在しうる。
+    enrich で % 正規化。UI は `district_eligible_voters` からの再計算を優先（web/app.js v2.10.9+）。
 - 再実行: `python code/04-seiji-gakkai/run_sh_d_pipeline_v1.0.py`
   - 選挙区のみ: `export_seiji_gakkai_smd_district_votes_v1.0.py`
   - 市区町村のみ: `export_seiji_gakkai_smd_municipality_votes_v1.0.py`
   - 比例市区町村: `export_seiji_gakkai_pr_municipality_votes_v1.0.py`
   - 投票・有権者: `export_seiji_gakkai_turnout_v1.0.py`
   - 比例: `export_seiji_gakkai_pr_votes_v1.0.py`
+  - 当落・絶対得票 enrich: `enrich_seiji_gakkai_smd_district_outcome_v1.0.py`（pipeline 後に推奨）
+  - 地名表示QA監査: `audit_municipality_labels_v1.0.py`
+  - 表示QAプロセス記録: `code/04-seiji-gakkai/process_display_qa_v1.0.txt`
 - **UI**: 既定は「統合（総務省優先＋政治学会穴埋め）」。比較用に総務省のみ／政治学会のみも選択可。出典列で `source_code` を区別。選挙回表示は「1996-衆」形式。
 
 ### B. 中選挙区制（1958–1993 / 第28–40回）

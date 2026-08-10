@@ -1,0 +1,105 @@
+# 政治学会・表示QAプロセスメモ（v1.0）
+# 作成: 2026-08-10
+# 対象: 衆院・小選挙区（政治学会 SH-D / SH-HD）の表示まわり不具合と再発防止
+
+## 原則（必ず守る）
+- MIC 正本は触らない。政治学会は二次（別 parquet・source_code 分離）。
+- Silver / references 原本は改変しない。補正はエクスポート時の表示レイヤのみ。
+- city_raw / ward_raw に原文を残す。municipality は表示用合成名。
+- 手動地名訂正は seiji_gakkai_municipality_name_overrides.json に根拠付きで載せる。
+
+## 今回直した問題
+
+### A. 絶対得票率が 0.1% になる（衆42–45）
+- 現象: 北海道1区・共産など、相対得票率は妥当なのに絶対得票率が 0.1%。
+- 原因: CAN の absolute_vote_rate が回次でスケール混在。
+  - 41 / 46–48: パーセント（例 7.93）
+  - 42–45: 割合 0–1（例 0.0748 → UI がそのまま % 表示して 0.1%）
+- 修正:
+  1. web/app.js（v2.10.9）: 絶対得票率は district_eligible_voters があれば
+     `100 * value / district_eligible_voters` を優先。
+  2. enrich_seiji_gakkai_smd_district_outcome_v1.0.py（v1.0.1）:
+     有権者との誤差比較で割合→%へ正規化して parquet に書き戻す。
+- 確認例: コムラテイゾウ(42) → 約 7.5%、ヨコヤマヒロコ(43) → 約 5.8%。
+
+### B. 開票区つき市町村名の表記ゆれ（全国）
+- 現象: 青森市-1 / 青森市1区 / 青森市（1区）が並存。ふじみ野市-7 なども同様。
+- 原因: 政治学会 ward が `市-N`、MIC が `市N区` または `市（N区）`。
+- 修正（全国共通）:
+  1. UI: normalizeMunicipalityLabel / municipalityNormSql
+     - `X-N` → `X（N区）`
+     - `X市N区` → `X市（N区）`
+     - プルダウン・フィルタ・表示・統合ギャップ判定に適用
+  2. エクスポート compose_municipality:
+     - export_seiji_gakkai_smd_municipality_votes_v1.0.py（v1.0.1+）
+     - export_seiji_gakkai_pr_municipality_votes_v1.0.py
+     - export_seiji_gakkai_turnout_v1.0.py（v1.1.1+）
+- MIC 原本の `青森市1区` は書き換えず、UI 正規化で合流。
+
+### C. 市町村名の二重結合（士別市土別市 など）
+- 現象: 2012-衆46・北海道6区で「士別市土別市」。
+- 原因: Silver が city=士別市 / ward=土別市（1文字 OCR・異体字ゆれ）。
+  compose が「ward が city で始まらない」ため city+ward 連結。
+- 全国同類（市×市・22件）: 大館/大舘、大船渡/大舟渡、宜野湾/宣野湾、
+  竜野/龍野、五条/五條、善通寺/普通寺、朝霧/浅霧 など。
+- 例外1件: 中津市+日田市（別人市の同居）。連結は止め city のみ表示＋フラグ。
+- 修正: city と ward がともに「〜市」で異なるときは連結せず city を採用。
+  flags: skip_shi_shi_concat / near_duplicate_ward / conflicting_shi_ward
+- 八日市場市のような正当な市名は残る（二重結合ではない）。
+
+## 再実行手順（表示QA後の定番）
+
+```text
+# 1) 選挙区 outcome（絶対得票率の正規化含む）
+python code/04-seiji-gakkai/enrich_seiji_gakkai_smd_district_outcome_v1.0.py
+
+# 2) 市区町村・比例市町村・turnout（地名 compose 含む）
+python code/04-seiji-gakkai/export_seiji_gakkai_smd_municipality_votes_v1.0.py
+python code/04-seiji-gakkai/export_seiji_gakkai_pr_municipality_votes_v1.0.py
+python code/04-seiji-gakkai/export_seiji_gakkai_turnout_v1.0.py
+
+# または SH-D 一式（Bronze/Silver から）
+python code/04-seiji-gakkai/run_sh_d_pipeline_v1.0.py
+# 注意: pipeline 後に enrich を dual で回す（absolute_vote_rate）
+
+# 3) 監査（表記ゆれ・市×市連結の残存チェック）
+python code/04-seiji-gakkai/audit_municipality_labels_v1.0.py
+```
+
+## 成果物・コード対応表
+
+| 内容 | パス |
+|------|------|
+| 地名 override | code/04-seiji-gakkai/seiji_gakkai_municipality_name_overrides.json |
+| SMD 市町村 export | code/04-seiji-gakkai/export_seiji_gakkai_smd_municipality_votes_v1.0.py |
+| PR 市町村 export | code/04-seiji-gakkai/export_seiji_gakkai_pr_municipality_votes_v1.0.py |
+| turnout export | code/04-seiji-gakkai/export_seiji_gakkai_turnout_v1.0.py |
+| 絶対得票 enrich | code/04-seiji-gakkai/enrich_seiji_gakkai_smd_district_outcome_v1.0.py |
+| 表記監査 | code/04-seiji-gakkai/audit_municipality_labels_v1.0.py |
+| UI 正規化・絶対得票 | web/app.js（v2.10.9+） |
+| 出典メモ | references/seiji-gakkai/data-memo.txt |
+| 監査レポート | output/04-seiji-gakkai/yyyymmdd_HHMM_muni_label_audit.txt |
+| name_flags イベント | output/04-seiji-gakkai/*_municipality_name_flags.jsonl |
+
+## 監査で見るべき指標
+- dash (`市-N`) / cityNku (`市N区`) 残件数 → 政治学会側は 0 が理想
+- paren (`市（N区）`) 件数 → 正規化後の標準形
+- skip_shi_shi_concat イベント → OCR ゆれ検出の証跡（表示は city 単体）
+- municipality が `.+市.+市` かつ city≠ward の連結残骸 → 0 が理想
+  （八日市場市など正当名は除外）
+
+## やってはいけないこと
+- references/seiji-gakkai の Bronze/Silver/CSV を「正しかったことにする」改変
+- MIC municipality_facts へ政治学会行を silently merge
+- 行政名の推測リネームを override 無しで量産（根拠・回次・地区を残す）
+
+## 追記: 政党別名の誤結合（2026-08-10）
+- 現象: 比例・衆42で「社会民主党」が2行（560万票と 99,565票）。
+- 原因: party alias シードが「社会」→「社会民主党」。SH-B 衆42は
+  `社民`（全国合計 5,603,680）と別政党 `社会`（東京のみ 99,565）が同居。
+- 修正: `build_party_name_aliases_v1.0.py` からグローバル「社会」対応を削除。
+  `社民`→社会民主党のみ残す。再実行:
+  `python code/03-person-aliases/build_party_name_aliases_v1.0.py`
+- 再発防止監査:
+  `python code/03-person-aliases/audit_party_alias_collisions_v1.0.py`
+  → `output/03-person-aliases/*_party_alias_collision_audit.txt`

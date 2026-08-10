@@ -1,5 +1,8 @@
 /*
  * 国政選データ横断検索β — DuckDB-Wasm 検索
+ * v2.10.9
+ * - 政治学会・小選挙区の絶対得票率を有権者数から再計算（42–45回の割合スケール混在を回避）
+ * - 市区町村名の開票区表記を「市（N区）」に正規化（市-N / 市N区 / 市（N区）の混在解消）
  * v2.10.8
  * - 小選挙区／参院県区の相対得票率を、当落・キーワード適用前の全区得票で計算
  * v2.10.7
@@ -166,6 +169,38 @@ function formatPercent(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
   return `${displayPercent.format(n)}%`;
+}
+
+/**
+ * 開票区つき市区町村名の表記ゆれを揃える。
+ * 例: 青森市-1 / 青森市1区 → 青森市（1区）
+ * 原文の行政名は変えず、分割開票区の接尾だけを統一する。
+ */
+function normalizeMunicipalityLabel(name) {
+  const s = String(name || '').trim();
+  if (!s) return s;
+  let m = s.match(/^(.+)-(\d+)$/);
+  if (m) return `${m[1]}（${m[2]}区）`;
+  m = s.match(/^(.+?[市町村])(\d+)区$/);
+  if (m) return `${m[1]}（${m[2]}区）`;
+  return s;
+}
+
+/** DuckDB: municipality 列（または式）を表示用ラベルへ */
+function municipalityNormSql(expr) {
+  return `CASE
+    WHEN regexp_matches(${expr}, '^.+-\\d+$')
+      THEN regexp_replace(${expr}, '^(.+)-(\\d+)$', '\\1（\\2区）')
+    WHEN regexp_matches(${expr}, '^.+[市町村]\\d+区$')
+      THEN regexp_replace(${expr}, '^(.+[市町村])(\\d+)区$', '\\1（\\2区）')
+    ELSE ${expr}
+  END`;
+}
+
+function municipalityFilterSql(expr = 'municipality') {
+  if (!els.municipality?.value) return null;
+  const want = normalizeMunicipalityLabel(els.municipality.value);
+  return `${municipalityNormSql(expr)} = '${escapeSql(want)}'`;
 }
 
 /** 惜敗率。当選（≈100%）は「━」 */
@@ -1031,13 +1066,13 @@ async function refreshMunicipalityOptions() {
       const micParts = [...parts];
       if (state.chamber === 'sangiin') micParts.push(`chamber = 'sangiin'`);
       else micParts.push(`(chamber IS NULL OR chamber = 'shugiin')`);
-      unions.push(`SELECT DISTINCT municipality FROM read_parquet('municipality_facts.parquet') WHERE ${micParts.join(' AND ')}`);
+      unions.push(`SELECT DISTINCT ${municipalityNormSql('municipality')} AS municipality FROM read_parquet('municipality_facts.parquet') WHERE ${micParts.join(' AND ')}`);
     }
     if ((seiji || unified) && state.hasSeijiSmdMuni) {
-      unions.push(`SELECT DISTINCT municipality FROM read_parquet('seiji_gakkai_smd_municipality_votes.parquet') WHERE ${parts.join(' AND ')}`);
+      unions.push(`SELECT DISTINCT ${municipalityNormSql('municipality')} AS municipality FROM read_parquet('seiji_gakkai_smd_municipality_votes.parquet') WHERE ${parts.join(' AND ')}`);
     }
     if ((seiji || unified) && state.hasSeijiPrMuni) {
-      unions.push(`SELECT DISTINCT municipality FROM read_parquet('seiji_gakkai_pr_municipality_votes.parquet') WHERE ${parts.join(' AND ')}`);
+      unions.push(`SELECT DISTINCT ${municipalityNormSql('municipality')} AS municipality FROM read_parquet('seiji_gakkai_pr_municipality_votes.parquet') WHERE ${parts.join(' AND ')}`);
     }
     if (!unions.length) {
       fillSelect(els.municipality, []);
@@ -1046,8 +1081,8 @@ async function refreshMunicipalityOptions() {
     const result = await state.conn.query(`
       SELECT DISTINCT municipality FROM (${unions.join(' UNION ')})
       ORDER BY municipality`);
-    const names = result.toArray().map((row) => String(row.toJSON().municipality));
-    fillSelect(els.municipality, sortMunicipalities(names).map((name) => ({ value: name, label: name })));
+    const names = result.toArray().map((row) => normalizeMunicipalityLabel(String(row.toJSON().municipality)));
+    fillSelect(els.municipality, sortMunicipalities([...new Set(names)]).map((name) => ({ value: name, label: name })));
   } catch (error) {
     console.error(error);
     fillSelect(els.municipality, []);
@@ -1421,7 +1456,7 @@ function commonFilters({ includePref = true, includeDistrict = false, includeMun
   if (includePref && els.prefecture.value) parts.push(`prefecture = '${escapeSql(els.prefecture.value)}'`);
   if (includeDistrict && els.district.value) parts.push(`district_number = ${Number(els.district.value)}`);
   if (includeMunicipality && els.municipality.value) {
-    parts.push(`municipality = '${escapeSql(els.municipality.value)}'`);
+    parts.push(municipalityFilterSql('municipality'));
   }
   return parts;
 }
@@ -1555,7 +1590,7 @@ function whereClausePrefRelated() {
     parts.push(`prefecture IN (
       SELECT DISTINCT prefecture
       FROM read_parquet('municipality_facts.parquet')
-      WHERE municipality = '${escapeSql(els.municipality.value)}' AND prefecture IS NOT NULL
+      WHERE ${municipalityFilterSql('municipality')} AND prefecture IS NOT NULL
     )`);
   }
   return parts.join(' AND ');
@@ -1605,12 +1640,14 @@ function selectSql() {
             )
             ELSE NULL
           END AS relative_share,
-          coalesce(
-            s.absolute_vote_rate,
-            CASE WHEN coalesce(s.district_eligible_voters, 0) > 0
+          CASE
+            WHEN coalesce(s.district_eligible_voters, 0) > 0
               THEN 100.0 * s.value / s.district_eligible_voters
-              ELSE NULL END
-          ) AS absolute_share,
+            WHEN s.absolute_vote_rate IS NULL THEN NULL
+            /* CAN 42–45 は割合(0–1)、他回は％。有権者が無いときだけ補正 */
+            WHEN s.absolute_vote_rate <= 1 THEN 100.0 * s.absolute_vote_rate
+            ELSE s.absolute_vote_rate
+          END AS absolute_share,
           s.sekihairitsu AS sekihai_rate,
           CAST(NULL AS VARCHAR) AS gender,
           coalesce(s.elected_smd, false) AS elected
@@ -1772,7 +1809,7 @@ function selectSql() {
     if (usesSeijiSource() || usesUnifiedSource()) {
       const seijiSmd = state.hasSeijiSmdMuni ? `
         SELECT election_kaiji, category, prefecture, prefecture_code, district_number,
-               municipality,
+               ${municipalityNormSql('municipality')} AS municipality,
                CASE metric
                  WHEN 'eligible_voters' THEN '有権者数'
                  WHEN 'voters' THEN '投票者数'
@@ -1782,10 +1819,10 @@ function selectSql() {
                CASE
                  WHEN metric = 'candidate_votes'
                    AND sum(value) OVER (
-                     PARTITION BY election_kaiji, prefecture, municipality, metric
+                     PARTITION BY election_kaiji, prefecture, ${municipalityNormSql('municipality')}, metric
                    ) > 0
                  THEN 100.0 * value / sum(value) OVER (
-                   PARTITION BY election_kaiji, prefecture, municipality, metric
+                   PARTITION BY election_kaiji, prefecture, ${municipalityNormSql('municipality')}, metric
                  )
                  ELSE NULL
                END AS relative_share,
@@ -1794,7 +1831,7 @@ function selectSql() {
         WHERE ${whereClauseSeijiMuni()}` : null;
       const seijiPr = state.hasSeijiPrMuni ? `
         SELECT election_kaiji, category, prefecture, prefecture_code, district_number,
-               municipality,
+               ${municipalityNormSql('municipality')} AS municipality,
                CASE metric
                  WHEN 'eligible_voters' THEN '有権者数'
                  WHEN 'voters' THEN '投票者数'
@@ -1804,10 +1841,10 @@ function selectSql() {
                CASE
                  WHEN metric = 'party_votes'
                    AND sum(value) OVER (
-                     PARTITION BY election_kaiji, prefecture, municipality, metric
+                     PARTITION BY election_kaiji, prefecture, ${municipalityNormSql('municipality')}, metric
                    ) > 0
                  THEN 100.0 * value / sum(value) OVER (
-                   PARTITION BY election_kaiji, prefecture, municipality, metric
+                   PARTITION BY election_kaiji, prefecture, ${municipalityNormSql('municipality')}, metric
                  )
                  ELSE NULL
                END AS relative_share,
@@ -1846,7 +1883,7 @@ function selectSql() {
             AND m.category = '小選挙区'
             AND m.election_kaiji = s.election_kaiji
             AND m.prefecture = s.prefecture
-            AND m.municipality = s.municipality
+            AND ${municipalityNormSql('m.municipality')} = ${municipalityNormSql('s.municipality')}
         )` : null;
       const gapPr = seijiPr ? `
         SELECT * FROM (${seijiPr}) s
@@ -1856,19 +1893,19 @@ function selectSql() {
             AND m.category = '比例代表'
             AND m.election_kaiji = s.election_kaiji
             AND m.prefecture = s.prefecture
-            AND m.municipality = s.municipality
+            AND ${municipalityNormSql('m.municipality')} = ${municipalityNormSql('s.municipality')}
         )` : null;
       return `
       WITH muni_rows AS (
         SELECT election_kaiji, category, prefecture, prefecture_code, district_number,
-               municipality, subject, party, value, unit, grain, source_code,
+               ${municipalityNormSql('municipality')} AS municipality, subject, party, value, unit, grain, source_code,
                CASE
                  WHEN category IN ('小選挙区', '選挙区', '比例代表')
                    AND sum(value) OVER (
-                     PARTITION BY election_kaiji, category, prefecture, municipality, metric
+                     PARTITION BY election_kaiji, category, prefecture, ${municipalityNormSql('municipality')}, metric
                    ) > 0
                  THEN 100.0 * value / sum(value) OVER (
-                   PARTITION BY election_kaiji, category, prefecture, municipality, metric
+                   PARTITION BY election_kaiji, category, prefecture, ${municipalityNormSql('municipality')}, metric
                  )
                  ELSE NULL
                END AS relative_share,
@@ -1979,14 +2016,14 @@ function selectSql() {
       ),
       muni_rows AS (
         SELECT m.election_kaiji, m.category, m.prefecture, m.prefecture_code, m.district_number,
-               m.municipality, ${subjectExpr} AS subject, m.party, m.value, m.unit, m.grain, m.source_code,
+               ${municipalityNormSql('m.municipality')} AS municipality, ${subjectExpr} AS subject, m.party, m.value, m.unit, m.grain, m.source_code,
                CASE
                  WHEN m.category IN ('小選挙区', '選挙区', '比例代表')
                    AND sum(m.value) OVER (
-                     PARTITION BY m.election_kaiji, m.category, m.prefecture, m.municipality, m.metric
+                     PARTITION BY m.election_kaiji, m.category, m.prefecture, ${municipalityNormSql('m.municipality')}, m.metric
                    ) > 0
                  THEN 100.0 * m.value / sum(m.value) OVER (
-                   PARTITION BY m.election_kaiji, m.category, m.prefecture, m.municipality, m.metric
+                   PARTITION BY m.election_kaiji, m.category, m.prefecture, ${municipalityNormSql('m.municipality')}, m.metric
                  )
                  ELSE NULL
                END AS relative_share,

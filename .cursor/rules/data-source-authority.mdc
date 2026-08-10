@@ -50,8 +50,8 @@ alwaysApply: true
    - 関西大: 既存 CSV を回次・種別で固定配置（現行どおり）。
 3. **倉庫接続（opt-in）**  
    - 関西大: 現状維持（参21全面・参22未接続県の municipality 穴埋め）。  
-   - 政治学会・小選挙区: `seiji_gakkai_smd_district_votes.parquet` / `seiji_gakkai_smd_municipality_votes.parquet` / `seiji_gakkai_turnout.parquet`（grain: prefecture/district/municipality + PR block/national） / `seiji_gakkai_pr_votes.parquet` / `seiji_gakkai_pr_municipality_votes.parquet`（SH-HD、`seiji-gakkai-pr-muni-*`）。**MIC に merge しない**。地名は raw 保持＋手動 override。  
-   - 政治学会・中選挙区: 当面エクスポートなし（Web 非掲載）。
+ - 政治学会・小選挙区: `seiji_gakkai_smd_district_votes.parquet` / `seiji_gakkai_smd_municipality_votes.parquet` / `seiji_gakkai_turnout.parquet`（grain: prefecture/district/municipality + PR block/national） / `seiji_gakkai_pr_votes.parquet` / `seiji_gakkai_pr_municipality_votes.parquet`（SH-HD、`seiji-gakkai-pr-muni-*`）。**MIC に merge しない**。地名は raw 保持＋手動 override＋開票区接尾正規化／市×市連結抑制（手順: `code/04-seiji-gakkai/process_display_qa_v1.0.txt`）。 
+ - 政治学会・中選挙区: 当面エクスポートなし（Web 非掲載）。
 4. **Web 公開**  
    - 既定表示は **統合（MIC 優先＋政治学会穴埋め）** の小選挙区制以降。同一キーでは常に MIC。行ごとに `source_code` を残す（物理 merge しない）。  
    - **中選挙区は当面非掲載**。公開時は「衆院選（中選挙区）」第3コーナのみ（既存衆院選に混在させない）。  

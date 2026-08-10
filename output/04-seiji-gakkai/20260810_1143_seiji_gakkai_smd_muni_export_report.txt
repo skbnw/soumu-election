@@ -1,0 +1,57 @@
+# 政治学会 SH-D → seiji_gakkai_smd_municipality_votes エクスポート
+generated_at=2026-08-10T11:43:07
+silver=C:\Users\SKBNW\Documents\Github\soumu-election\references\seiji-gakkai\02-silver\1996-2017\03-SH-D\sh-d-votes.jsonl
+overrides=C:\Users\SKBNW\Documents\Github\soumu-election\code\04-seiji-gakkai\seiji_gakkai_municipality_name_overrides.json
+warehouse_out=C:\Users\SKBNW\Documents\Github\soumu-election\data\warehouse\parquet\seiji_gakkai_smd_municipality_votes.parquet
+web_out=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\seiji_gakkai_smd_municipality_votes.parquet
+rows=113695
+candidate_vote_rows=72379 null_candidate_votes=0
+missing_prefecture=0
+name_flag_events=24 manual_override_events=2 unfixed_cjk_space_events=0
+flag_counts={'near_duplicate_ward': 21, 'skip_shi_shi_concat': 22, 'conflicting_shi_ward': 1, 'manual_override': 2}
+
+## rows by election_kaiji
+- 41: 19544
+- 42: 19427
+- 43: 17762
+- 44: 13268
+- 45: 11407
+- 46: 12062
+- 47: 10065
+- 48: 10160
+
+## rows by metric
+- candidate_votes: 72379
+- eligible_voters: 20658
+- voters: 20658
+
+## name policy
+- city_raw / ward_raw = Silver 原文（改変なし）
+- city / ward / municipality = NFKC + 手動 override のみ
+- 漢字間スペースは自動では潰さず cjk_internal_space フラグ。既知例のみ override
+- MIC municipality_facts へは merge しない
+- UI 未接続
+
+## name flag examples (max 20)
+- th=41 秋田2区: raw=('大館市','大舘市') -> ('大館市','大舘市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=41 北海道7区: raw=('士別市','土別市') -> ('士別市','土別市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=42 秋田2区: raw=('大館市','大舘市') -> ('大館市','大舘市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=42 北海道7区: raw=('士別市','土別市') -> ('士別市','土別市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=43 秋田2区: raw=('大館市','大舘市') -> ('大館市','大舘市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=43 岩手3区: raw=('大船渡市','大舟渡市') -> ('大船渡市','大舟渡市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=43 沖縄2区: raw=('宜野湾市','宣野湾市') -> ('宜野湾市','宣野湾市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=44 岩手3区: raw=('大船渡市','大舟渡市') -> ('大船渡市','大舟渡市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=44 沖縄2区: raw=('宜野湾市','宣野湾市') -> ('宜野湾市','宣野湾市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=44 兵庫12区: raw=('竜野市','龍野市') -> ('竜野市','龍野市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=44 北海道6区: raw=('士別市','土別市') -> ('士別市','土別市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=45 沖縄2区: raw=('宜野湾市','宣野湾市') -> ('宜野湾市','宣野湾市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=45 香川3区: raw=('善通寺市','普通寺市') -> ('善通寺市','普通寺市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=45 奈良4区: raw=('五条市','五條市') -> ('五条市','五條市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=45 北海道6区: raw=('士別市','土別市') -> ('士別市','土別市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=46 大分3区: raw=('中津市','日田市') -> ('中津市','日田市') flags=conflicting_shi_ward|skip_shi_shi_concat
+- th=46 沖縄2区: raw=('宜野湾市','宣野湾市') -> ('宜野湾市','宣野湾市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=46 香川3区: raw=('善通寺市','普通寺市') -> ('善通寺市','普通寺市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=46 北海道6区: raw=('士別市','土別市') -> ('士別市','土別市') flags=near_duplicate_ward|skip_shi_shi_concat
+- th=47 沖縄2区: raw=('宜野湾市','宣野湾市') -> ('宜野湾市','宣野湾市') flags=near_duplicate_ward|skip_shi_shi_concat
+
+OK: municipality export complete

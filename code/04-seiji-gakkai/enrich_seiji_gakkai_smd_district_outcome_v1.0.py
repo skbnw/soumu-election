@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 enrich_seiji_gakkai_smd_district_outcome_v1.0.py
+- v1.0.1: absolute_vote_rate を％へ正規化（CAN 42–45 は割合 0–1）
 - CAN の vote_rank / absolute_vote_rate / sekihairitsu を付与
 - SH-B の is_pr_winner を付与（比例復活）
 - MIC facts には触れない（seiji parquet のみ更新）
@@ -51,6 +52,22 @@ def load_shb_pr_winners():
     return winners
 
 
+def normalize_absolute_vote_rate(abs_rate, votes, eligible):
+    """CAN の absolute_vote_rate をパーセントに揃える（42–45 は割合 0–1）。"""
+    if abs_rate is None:
+        return None
+    try:
+        rate = float(abs_rate)
+    except (TypeError, ValueError):
+        return abs_rate
+    if eligible and votes is not None and float(eligible) > 0:
+        calc = 100.0 * float(votes) / float(eligible)
+        if abs(calc - rate * 100.0) < abs(calc - rate):
+            return round(rate * 100.0, 6)
+        return rate
+    return rate
+
+
 def main():
     can = load_can()
     pr_winners = load_shb_pr_winners()
@@ -65,7 +82,11 @@ def main():
         key = (int(row["election_kaiji"]), int(row["district_number"]), nfkc(row.get("candidate")))
         c = can.get(key)
         vote_rank = c.get("vote_rank") if c else None
-        abs_rate = c.get("absolute_vote_rate") if c else None
+        abs_rate = normalize_absolute_vote_rate(
+            c.get("absolute_vote_rate") if c else None,
+            row.get("value"),
+            row.get("district_eligible_voters"),
+        )
         seki = c.get("sekihairitsu") if c else None
         if c:
             matched_can += 1

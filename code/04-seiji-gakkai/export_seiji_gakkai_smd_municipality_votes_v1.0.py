@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 export_seiji_gakkai_smd_municipality_votes_v1.0.py
+- v1.0.2: city/ward がともに「〜市」で異なるとき連結しない（士別市土別市など OCR・異体字）
+- v1.0.1: 開票区表記を「市（N区）」に統一（市-N / 市N区）。city_raw/ward_raw は原文保持
 - 政治学会 SH-D Silver の municipalities を市区町村×候補へ flatten
 - MIC municipality_facts には merge しない（別 parquet）
-- 自治体名: 原本を city_raw/ward_raw に保持。表示用は NFKC + 手動 override のみ
+- 自治体名: 原本を city_raw/ward_raw に保持。表示用は NFKC + 手動 override + 開票区接尾正規化
   （勝手な地名訂正はしない。漢字間スペース等の明確ノイズのみ）
 - source_code: seiji-gakkai-smd-muni-{kaiji:02d}
 
@@ -68,10 +70,63 @@ PREF_CODE = {
 
 CJK_SPACE_RE = re.compile(r"(?<=[\u4e00-\u9fff々〆ヵヶ])[\s\u3000]+(?=[\u4e00-\u9fff々〆ヵヶ])")
 AGG_EXACT = {"計", "合計", "確定", "不在者投票", "在外", "在外投票"}
+SPLIT_WARD_RE = re.compile(r"^(.+)-(\d+)$")
+CITY_N_KU_RE = re.compile(r"^(.+?[市町村])(\d+)区$")
 
 
 def nfkc(value: str | None) -> str:
     return unicodedata.normalize("NFKC", str(value or "").strip())
+
+
+def normalize_municipality_label(name: str) -> str:
+    """開票区接尾の表記ゆれのみ揃える（行政名そのものは変えない）。"""
+    s = nfkc(name)
+    m = SPLIT_WARD_RE.match(s)
+    if m:
+        return f"{m.group(1)}（{m.group(2)}区）"
+    m = CITY_N_KU_RE.match(s)
+    if m:
+        return f"{m.group(1)}（{m.group(2)}区）"
+    return s
+
+
+def edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (0 if ca == cb else 1)))
+        prev = cur
+    return prev[-1]
+
+
+def compose_municipality(city: str, ward: str) -> tuple[str, list[str]]:
+    """
+    Returns (municipality_label, compose_flags).
+    - 郡+町村 / 市+区 は従来どおり連結
+    - city/ward がともに「〜市」で異なる場合は連結しない（OCR・異体字の二重名を防ぐ）
+    """
+    flags: list[str] = []
+    city = nfkc(city)
+    ward = nfkc(ward)
+    if city and ward:
+        if ward.startswith(city) or ward == city:
+            return normalize_municipality_label(ward if ward.startswith(city) else city), flags
+        if city.endswith("市") and ward.endswith("市") and city != ward:
+            flags.append("skip_shi_shi_concat")
+            if edit_distance(city, ward) <= 1:
+                flags.append("near_duplicate_ward")
+            else:
+                flags.append("conflicting_shi_ward")
+            return normalize_municipality_label(city), flags
+        return normalize_municipality_label(f"{city}{ward}"), flags
+    return normalize_municipality_label(city or ward or ""), flags
 
 
 def prefecture_from_district_name(district_name: str) -> tuple[str | None, str | None]:
@@ -121,19 +176,10 @@ def apply_name(
         flags.append("manual_override")
         note = (ov.get("note") or "").strip() or None
     elif CJK_SPACE_RE.search(value):
-        # 明確な漢字間スペースは折りたたみ候補としてフラグのみ（自動では潰さない）
         flags.append("cjk_internal_space")
     if value in AGG_EXACT:
         flags.append("aggregate_label")
     return value, flags, note
-
-
-def compose_municipality(city: str, ward: str) -> str:
-    if city and ward:
-        if ward.startswith(city):
-            return ward
-        return f"{city}{ward}"
-    return city or ward or ""
 
 
 def flatten(path: Path, overrides: dict[tuple[str, str], dict]) -> tuple[list[dict], list[dict]]:
@@ -156,9 +202,9 @@ def flatten(path: Path, overrides: dict[tuple[str, str], dict]) -> tuple[list[di
                 ward_raw = str(muni.get("ward") or "")
                 city, city_flags, city_note = apply_name("city", city_raw, overrides)
                 ward, ward_flags, ward_note = apply_name("ward", ward_raw, overrides)
-                municipality = compose_municipality(city, ward)
-                flags = sorted(set(city_flags + ward_flags))
-                if city_flags or ward_flags:
+                municipality, compose_flags = compose_municipality(city, ward)
+                flags = sorted(set(city_flags + ward_flags + compose_flags))
+                if flags:
                     name_events.append(
                         {
                             "election_kaiji": th,

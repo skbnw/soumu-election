@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 export_seiji_gakkai_turnout_v1.0.py
+- v1.1.1: 市町村粒の開票区表記を「市（N区）」に統一（市-N）
 - v1.1: grain に小選挙区・市町村を追加（都道府県／ブロック／全国は維持）
 - v1.0: 政治学会 SH-D（小選挙区）＋ SH-B（比例ブロック）から投票・有権者を別 parquet 化
 - MIC facts には merge しない
@@ -110,15 +111,25 @@ def prefecture_from_district_name(district_name: str) -> tuple[str | None, str |
 
 
 def compose_municipality(city: str, ward: str) -> str:
+    def _norm(name: str) -> str:
+        s = nfkc(name)
+        m = re.match(r"^(.+)-(\d+)$", s)
+        if m:
+            return f"{m.group(1)}（{m.group(2)}区）"
+        m = re.match(r"^(.+?[市町村])(\d+)区$", s)
+        if m:
+            return f"{m.group(1)}（{m.group(2)}区）"
+        return s
+
     city = nfkc(city)
     ward = nfkc(ward)
     if not city:
-        return ward
-    if not ward or ward == city:
-        return city
-    if ward.startswith(city):
-        return ward
-    return f"{city}{ward}"
+        return _norm(ward)
+    if not ward or ward == city or ward.startswith(city):
+        return _norm(ward if ward.startswith(city) else city)
+    if city.endswith("市") and ward.endswith("市") and city != ward:
+        return _norm(city)
+    return _norm(f"{city}{ward}")
 
 
 def metric_rows(

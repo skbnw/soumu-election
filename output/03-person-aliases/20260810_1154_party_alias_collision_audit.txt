@@ -1,0 +1,6 @@
+# party alias collision audit (seiji PR)
+generated_at=2026-08-10T11:54:01
+rule: same election_kaiji, 2+ distinct raw party names share one canonical display
+collisions=0
+
+(none)

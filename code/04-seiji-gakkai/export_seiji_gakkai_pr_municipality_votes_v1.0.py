@@ -110,13 +110,26 @@ def apply_name(field: str, raw: str, overrides: dict[tuple[str, str], dict]) -> 
 
 
 def compose_municipality(city: str, ward: str) -> str:
+    def _norm(name: str) -> str:
+        s = nfkc(name)
+        m = re.match(r"^(.+)-(\d+)$", s)
+        if m:
+            return f"{m.group(1)}（{m.group(2)}区）"
+        m = re.match(r"^(.+?[市町村])(\d+)区$", s)
+        if m:
+            return f"{m.group(1)}（{m.group(2)}区）"
+        return s
+
+    city = nfkc(city)
+    ward = nfkc(ward)
     if not city:
-        return ward
-    if not ward or ward == city:
-        return city
-    if ward.startswith(city):
-        return ward
-    return f"{city}{ward}"
+        return _norm(ward)
+    if not ward or ward == city or ward.startswith(city):
+        return _norm(ward if ward.startswith(city) else city)
+    # 士別市+土別市 のような市×市 OCR ゆれは連結しない
+    if city.endswith("市") and ward.endswith("市") and city != ward:
+        return _norm(city)
+    return _norm(f"{city}{ward}")
 
 
 def flatten(path: Path, overrides: dict) -> list[dict]:

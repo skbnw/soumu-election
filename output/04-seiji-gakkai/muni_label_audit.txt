@@ -1,0 +1,43 @@
+# municipality label audit
+generated_at=2026-08-10T11:47:46
+process=code/04-seiji-gakkai/process_display_qa_v1.0.txt
+
+## seiji_smd
+path=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\seiji_gakkai_smd_municipality_votes.parquet
+rows=113695 dash=0 cityNku=0 paren=5244 | distinct dash=0 cityNku=0 paren=270
+samples (dash / cityNku): (none)
+
+## seiji_pr
+path=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\seiji_gakkai_pr_municipality_votes.parquet
+rows=192366 dash=0 cityNku=0 paren=9491 | distinct dash=0 cityNku=0 paren=271
+samples (dash / cityNku): (none)
+
+## seiji_turnout
+path=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\seiji_gakkai_turnout.parquet
+rows=70542 dash=0 cityNku=0 paren=2820 | distinct dash=0 cityNku=0 paren=270
+samples (dash / cityNku): (none)
+
+## mic
+path=C:\Users\SKBNW\Documents\Github\soumu-election\web\data\municipality_facts.parquet
+rows=2337320 dash=0 cityNku=23 paren=10743 | distinct dash=0 cityNku=2 paren=260
+samples (dash / cityNku):
+  青森市1区	13
+  青森市4区	10
+
+## shi×shi concat remnants (seiji_smd)
+rule: municipality looks like X市Y市 and city_raw<>ward_raw
+concat_remnants=0 (expect 0 after v1.0.2 compose)
+skip_shi_shi_concat flags:
+  conflicting_shi_ward|skip_shi_shi_concat	muni=1	rows=6
+  near_duplicate_ward|skip_shi_shi_concat	muni=8	rows=117
+
+## cross-source collisions under UI norm key
+norm_keys_with_multiple_raw=2
+  青森市（1区）	variants=2	青森市1区 | 青森市（1区）	[mic,seiji_smd]
+  青森市（4区）	variants=2	青森市4区 | 青森市（4区）	[seiji_smd,mic]
+
+## pass criteria (display QA)
+- seiji_* dash/cityNku row counts == 0
+- shi×shi concat_remnants == 0
+- MIC cityNku may remain (e.g. 青森市1区); UI norm must collapse to 市（N区）
+
