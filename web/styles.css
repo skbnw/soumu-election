@@ -262,8 +262,26 @@ td.numeric { font-variant-numeric: tabular-nums; font-weight: 700; }
 }
 
 .about { display: grid; grid-template-columns: 280px 1fr; gap: 48px; padding: 56px 0; border-top: 1px solid var(--line); }
-.about-copy { max-width: 700px; color: var(--muted); font-size: 13px; line-height: 1.9; }
-.about-copy p { margin: 0 0 16px; }
+.about-copy { max-width: 720px; color: var(--muted); font-size: 13px; line-height: 1.9; }
+.about-copy h3 {
+  margin: 28px 0 10px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.about-copy h3:first-child { margin-top: 0; }
+.about-copy p { margin: 0 0 12px; }
+.about-copy ul { margin: 0 0 16px; padding-left: 1.2em; }
+.about-copy li { margin: 0 0 6px; }
+.about-copy code {
+  font-size: 11px;
+  background: #f3f4f6;
+  padding: 1px 5px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+.about-copy strong { color: var(--ink); font-weight: 650; }
 footer { display: flex; justify-content: space-between; padding: 24px max(24px, calc((100vw - 1200px) / 2)); background: var(--ink); color: #aeb7c0; font-size: 10px; letter-spacing: .08em; }
 
 @media (max-width: 900px) {
