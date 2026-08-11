@@ -91,7 +91,7 @@ import {
   escapeSql, formatValue, formatPercent,
   normalizeMunicipalityLabel, municipalityNormSql, formatSekihai,
   displayNumber
-} from './utils.js';
+} from './utils.js?v=20260811a';
 
 
 const $ = (selector) => document.querySelector(selector);
@@ -662,6 +662,8 @@ const ELECTION_YEARS = {
     48: 2017, 49: 2021, 50: 2024, 51: 2026
   },
   sangiin: {
+    19: 2001,
+    20: 2004,
     21: 2007,
     22: 2010,
     23: 2013,
@@ -691,6 +693,8 @@ const ELECTION_PM = {
     51: { id: 'takaichi', label: '高市' }
   },
   sangiin: {
+    19: { id: 'koizumi', label: '内閣' },
+    20: { id: 'koizumi', label: '小泉' },
     21: { id: 'abe', label: '安倍' },
     22: { id: 'kan', label: '菅' },
     23: { id: 'abe', label: '安倍' },
@@ -3459,11 +3463,11 @@ async function init() {
     await withTimeout(state.db.instantiate(bundle.mainModule, null), INIT_TIMEOUT_MS, 'DuckDB instantiate');
     URL.revokeObjectURL(workerUrl);
 
-    const factsResponse = await fetch(new URL('./data/facts.parquet', window.location.href).href);
+    const factsResponse = await fetch(new URL('./data/facts.parquet?v=20260811b', window.location.href).href);
     if (!factsResponse.ok) throw new Error(`データ取得失敗: ${factsResponse.status}`);
     await state.db.registerFileBuffer('facts.parquet', new Uint8Array(await factsResponse.arrayBuffer()));
 
-    const muniResponse = await fetch(new URL('./data/municipality_facts.parquet', window.location.href).href);
+    const muniResponse = await fetch(new URL('./data/municipality_facts.parquet?v=20260811b', window.location.href).href);
     state.hasMunicipality = muniResponse.ok;
     if (state.hasMunicipality) {
       try {

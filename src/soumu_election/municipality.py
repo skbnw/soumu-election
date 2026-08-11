@@ -40,7 +40,7 @@ KANSAI_KIND_FILES = {
 KANSAI_DB_URL = "http://db.cps.kutc.kansai-u.ac.jp/main/index1.php"
 KANSAI_STATUS_MAP = {"新": "new", "現": "incumbent", "前": "incumbent", "元": "former"}
 # 手元の関西大選挙区CSVで県区（都道府県集計）を補充できる回
-KANSAI_DISTRICT_PREF_KAIJI = (21, 22, 23)
+KANSAI_DISTRICT_PREF_KAIJI = (19, 20, 21, 22, 23)
 
 DISTRICT_RE = re.compile(r"第(\d+)区")
 # 例: 札幌市西区（１区） / さいたま市見沼区(1区) / 南九州市(２区） / 札幌市西区第（４区）
@@ -782,8 +782,10 @@ def parse_kansai_sangiin_fill(
 
 
 def default_kansai_fill_specs() -> list[dict[str, Any]]:
-    """当面の穴埋め対象: 参21全面 + 参22のMIC未接続都道府県。"""
+    """当面の穴埋め対象: 参19全面 + 参20全面 + 参21全面 + 参22のMIC未接続都道府県。"""
     return [
+        {"kaiji": 19, "prefectures": None},
+        {"kaiji": 20, "prefectures": None},
         {"kaiji": 21, "prefectures": None},
         {
             "kaiji": 22,
