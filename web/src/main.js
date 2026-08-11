@@ -89,7 +89,8 @@
 import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.30.0/+esm';
 import {
   escapeSql, formatValue, formatPercent,
-  normalizeMunicipalityLabel, municipalityNormSql, formatSekihai
+  normalizeMunicipalityLabel, municipalityNormSql, formatSekihai,
+  displayNumber
 } from './utils.js';
 
 
