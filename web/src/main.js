@@ -306,6 +306,15 @@ function seijiNameMapJoinSql(alias = 's') {
     AND nm.kana = ${alias}.candidate`;
 }
 
+function seijiMuniNameMapJoinSql(alias = 's') {
+  if (!state.hasSeijiNameMap) return '';
+  return `LEFT JOIN read_parquet('seiji_candidate_name_map.parquet') nm
+    ON nm.election_kaiji = ${alias}.election_kaiji
+    AND nm.prefecture = ${alias}.prefecture
+    AND nm.district_number = ${alias}.district_number
+    AND nm.kana = ${alias}.candidate`;
+}
+
 function seijiDisplayCandidateSql(alias = 's') {
   return state.hasSeijiNameMap
     ? `coalesce(nm.kanji, ${alias}.candidate)`
@@ -394,15 +403,8 @@ function syncDataSourceUi() {
     [...els.scope.options].forEach((o) => { o.hidden = false; });
   }
 
-  if (els.gender && state.tab === 'turnout' && usesSeijiSource()) {
-    [...els.gender.options].forEach((o) => {
-      o.hidden = (o.value !== 'total' && o.value !== '');
-    });
-    if (els.gender.value !== 'total' && els.gender.value !== '') {
-      els.gender.value = 'total';
-    }
-  } else if (els.gender && state.tab === 'turnout') {
-    [...els.gender.options].forEach((o) => { o.hidden = false; });
+  if (els.gender && state.tab === 'turnout') {
+    [...els.gender.options].forEach((o) => { o.hidden = false; o.disabled = false; });
   }
 }
 
@@ -1297,6 +1299,32 @@ function applyChamber(chamberId) {
   }
 }
 
+function commonFiltersMuni(includePref, includeDistrict, alias = '') {
+  const p = alias ? `${alias}.` : '';
+  const parts = [];
+  if (els.election.value) parts.push(`${p}election_kaiji = ${Number(els.election.value)}`);
+  if (includePref && els.prefecture.value) parts.push(`${p}prefecture = '${escapeSql(els.prefecture.value)}'`);
+  if (includeDistrict && els.district.value) parts.push(`${p}district_number = ${Number(els.district.value)}`);
+  if (els.municipality.value) {
+    parts.push(municipalityFilterSql(`${p}municipality`));
+  }
+  return parts;
+}
+
+function whereClauseSeijiMuni(alias = '') {
+  const parts = commonFiltersMuni(true, true, alias);
+  if (els.keyword.value.trim()) {
+    const p = alias ? `${alias}.` : '';
+    const partsKeyword = [
+      keywordCompactSql(`${p}subject`),
+      keywordCompactSql(`${p}party`),
+      keywordPersonAliasSql(`${p}subject`, `${p}subject`)
+    ].filter(Boolean);
+    parts.push(`(${partsKeyword.join(' OR ')})`);
+  }
+  return parts.join(' AND ') || '1=1';
+}
+
 function clearResultsIdle(message = '条件を選んで「検索する」を押してください') {
   state.rows = [];
   state.matchTotal = 0;
@@ -1460,22 +1488,7 @@ function whereClauseSeijiSmd(alias = '') {
   return parts.join(' AND ');
 }
 
-function whereClauseSeijiMuni() {
-  const parts = [
-    ...commonFilters({ includePref: true, includeDistrict: true, includeMunicipality: true })
-  ];
-  if (els.keyword.value.trim()) {
-    const partsKeyword = [
-      keywordCompactSql('subject'),
-      keywordCompactSql('party'),
-      keywordCompactSql('candidate'),
-      keywordPersonAliasSql('subject', 'subject'),
-      keywordPersonAliasSql('candidate', 'candidate')
-    ].filter(Boolean);
-    parts.push(`(${partsKeyword.join(' OR ')})`);
-  }
-  return parts.join(' AND ') || '1=1';
-}
+
 
 function whereClauseSmdBase() {
   const contest = state.chamber === 'sangiin' ? 'district' : 'smd';
@@ -1770,27 +1783,28 @@ function selectSql() {
   if (state.tab === 'muni') {
     if (usesSeijiSource() || usesUnifiedSource()) {
       const seijiSmd = state.hasSeijiSmdMuni ? `
-        SELECT election_kaiji, category, prefecture, prefecture_code, district_number,
-               ${municipalityNormSql('municipality')} AS municipality,
-               CASE metric
+        SELECT s.election_kaiji, s.category, s.prefecture, s.prefecture_code, s.district_number,
+               ${municipalityNormSql('s.municipality')} AS municipality,
+               CASE s.metric
                  WHEN 'eligible_voters' THEN '有権者数'
                  WHEN 'voters' THEN '投票者数'
-                 ELSE subject
+                 ELSE coalesce(nm.kanji, s.candidate)
                END AS subject,
-               party, value, unit, grain, source_code, metric,
+               s.party, s.value, s.unit, s.grain, s.source_code, s.metric,
                CASE
-                 WHEN metric = 'candidate_votes'
-                   AND sum(value) OVER (
-                     PARTITION BY election_kaiji, prefecture, ${municipalityNormSql('municipality')}, metric
+                 WHEN s.metric = 'candidate_votes'
+                   AND sum(s.value) OVER (
+                     PARTITION BY s.election_kaiji, s.prefecture, ${municipalityNormSql('s.municipality')}, s.metric
                    ) > 0
-                 THEN 100.0 * value / sum(value) OVER (
-                   PARTITION BY election_kaiji, prefecture, ${municipalityNormSql('municipality')}, metric
+                 THEN 100.0 * s.value / sum(s.value) OVER (
+                   PARTITION BY s.election_kaiji, s.prefecture, ${municipalityNormSql('s.municipality')}, s.metric
                  )
                  ELSE NULL
                END AS relative_share,
                0 AS category_rank
-        FROM read_parquet('seiji_gakkai_smd_municipality_votes.parquet')
-        WHERE ${whereClauseSeijiMuni()}` : null;
+        FROM read_parquet('seiji_gakkai_smd_municipality_votes.parquet') s
+        ${seijiMuniNameMapJoinSql('s')}
+        WHERE ${whereClauseSeijiMuni('s')}` : null;
       const seijiPr = state.hasSeijiPrMuni ? `
         SELECT election_kaiji, category, prefecture, prefecture_code, district_number,
                ${municipalityNormSql('municipality')} AS municipality,
